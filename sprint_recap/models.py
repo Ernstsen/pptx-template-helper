@@ -1,0 +1,85 @@
+"""In-memory entities the program manipulates. Mirrors data-model.md.
+
+External representations (settings JSON, log file, pptx tokens, YouTrack
+JSON) live in their respective contracts under
+specs/001-sprint-recap-deck/contracts/.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from pathlib import Path
+from typing import Iterable, Literal, Optional, Union
+
+
+@dataclass(frozen=True)
+class Sprint:
+    id: str
+    name: str
+    start: date
+    end: date
+    archived: bool
+
+
+@dataclass(frozen=True)
+class SprintIssue:
+    id_readable: str
+    title: str
+    issue_type: str
+    parent_id_readable: Optional[str]
+    resolved_at: Optional[datetime]
+    created_at: datetime
+
+    @property
+    def is_finished(self) -> bool:
+        # FR-010: classification MUST NOT inspect any state-name string.
+        return self.resolved_at is not None
+
+    def is_subtask_to_collapse(self, sprint_ids: Iterable[str]) -> bool:
+        if self.parent_id_readable is None:
+            return False
+        if not isinstance(sprint_ids, (set, frozenset)):
+            sprint_ids = set(sprint_ids)
+        return self.parent_id_readable in sprint_ids
+
+
+# IssueTypeFilter is a *value*, not a wrapping dataclass: either the literal
+# string "all" or a list[str]. The data-model file documents that empty lists
+# get coerced to "all" with a logged WARN; that coercion happens in config.py
+# at load time so consumers see only normalized values.
+IssueTypeFilter = Union[Literal["all"], list[str]]
+
+
+@dataclass
+class SavedSettings:
+    youtrack_url: str
+    project_id: str
+    project_short_name: str
+    board_id: str
+    board_name: str
+    issue_type_filter: IssueTypeFilter = "all"
+    last_sprint_id: Optional[str] = None
+    schema_version: int = 1
+
+
+@dataclass
+class AgendaPlan:
+    finished: list[SprintIssue] = field(default_factory=list)
+    open: list[SprintIssue] = field(default_factory=list)
+    unfiltered_count: int = 0
+    filtered_count: int = 0
+    collapsed_subtask_count: int = 0
+
+
+@dataclass
+class RunInputs:
+    working_folder: Path
+    template_path: Path
+    settings: SavedSettings
+    token: str
+    sprint: Sprint
+    issues: list[SprintIssue]
+    prompt_mode: Literal["console", "tkinter"]
+    output_path: Path
+    log_path: Path

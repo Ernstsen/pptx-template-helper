@@ -1,0 +1,88 @@
+# sprint-recap
+
+A small Python desktop tool that turns a YouTrack sprint into a populated
+pptx recap deck. Drop `sprint_recap.py` into a folder containing your
+template, set `YOUTRACK_TOKEN`, double-click, and a fresh deck appears
+beside the template with the dates and agenda filled in.
+
+See `specs/001-sprint-recap-deck/` for the full specification, plan,
+contracts, and quickstart.
+
+## Prerequisites
+
+- Python 3.11 or later, available on `PATH`.
+- A YouTrack instance you can reach over the network.
+- A YouTrack API token with read access to the project's sprints and
+  issues.
+- A pptx template containing the five tokens documented in
+  `specs/001-sprint-recap-deck/contracts/template-tokens.md`.
+
+## One-time setup
+
+```bash
+# from the repository root
+python3 -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+## Setting `YOUTRACK_TOKEN`
+
+The program reads `YOUTRACK_TOKEN` afresh on every run. It is never
+written to settings, logs, or the produced deck (FR-016).
+
+### bash / zsh (macOS, Linux, WSL)
+
+```bash
+export YOUTRACK_TOKEN="perm:..."
+```
+
+### Windows PowerShell
+
+```powershell
+$env:YOUTRACK_TOKEN = "perm:..."
+```
+
+### Windows cmd
+
+```cmd
+set YOUTRACK_TOKEN=perm:...
+```
+
+To make the variable persist across sessions on Windows, set it via
+**System Properties → Environment Variables**.
+
+## Routine monthly run
+
+1. Drop `sprint_recap.py` (or a shortcut to it) into the working folder
+   that holds your pptx template.
+2. Make sure `YOUTRACK_TOKEN` is set in that shell/session.
+3. Double-click `sprint_recap.py` (Windows) or run
+   `python sprint_recap.py` from inside the working folder.
+4. On a configured folder, the program goes straight to producing the
+   deck for the sprint with the latest end date on the configured
+   board. (First-time setup arrives
+   in Iteration 2; until then, drop a hand-prepared `sprint-recap.json`
+   into the folder per
+   `specs/001-sprint-recap-deck/contracts/settings-file.md`.)
+5. The new deck appears as
+   `<template-stem>_<sprint-name>_<sprint-end-YYYY-MM-DD>.pptx`,
+   accompanied by `<output-stem>.log`. The original template is
+   untouched.
+
+## Tests
+
+```bash
+pytest
+```
+
+## Common errors
+
+| What you see | What to do |
+|---|---|
+| `YOUTRACK_TOKEN not set — see README.md` | Set the env var (above) and re-run. |
+| `Could not reach YouTrack at <url>` | Check VPN / DNS / URL typo. |
+| `Token rejected — check YOUTRACK_TOKEN` | Token expired or lacks read access; regenerate in YouTrack. |
+| `Project not visible to this token` | The token's user has no access; ask an admin. |
+| `Required template tokens missing: {{AGENDA_FINISHED}}` | Edit the template to insert the missing tokens. |
+| `Output file already exists — overwrite?` | Pick overwrite, save-as, or cancel — nothing is written until you answer. |
