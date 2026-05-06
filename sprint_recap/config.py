@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Optional
 
@@ -103,3 +104,55 @@ def read_token() -> str:
     if not value:
         raise EnvironmentError("YOUTRACK_TOKEN not set — see README.md")
     return value
+
+
+def save_settings(working_folder: Path, settings: SavedSettings) -> None:
+    """Persist `settings` to `<working_folder>/sprint-recap.json` atomically.
+
+    Writes JSON to a sibling `sprint-recap.json.tmp` and uses `os.replace`
+    to swap it into place — so a process killed mid-write never leaves a
+    half-written `sprint-recap.json` (contracts/settings-file.md
+    "Concurrency / atomicity"). The on-disk payload is restricted to the
+    declared fields of `SavedSettings`; any forbidden-key attribute that
+    a caller may have smuggled onto the dataclass via `setattr` is
+    dropped before serialization (FR-016 / FR-006). The token is never a
+    field of SavedSettings to begin with — this is defense in depth.
+
+    The serialized URL is right-stripped of trailing slashes so re-runs
+    don't drift between `https://yt/` and `https://yt`.
+    """
+    target = working_folder / SETTINGS_FILENAME
+    tmp = working_folder / (SETTINGS_FILENAME + ".tmp")
+
+    # Build the payload from the declared dataclass fields only. asdict()
+    # would also serialize any attribute set via setattr, which is what we
+    # explicitly want to avoid (the test suite smuggles a fake
+    # YOUTRACK_TOKEN onto a SavedSettings to confirm that path is blocked).
+    declared = {f.name for f in fields(SavedSettings)}
+    payload: dict[str, object] = {}
+    for name in declared:
+        if name in FORBIDDEN_KEYS:
+            # Belt + suspenders: a future schema must never legitimize a
+            # forbidden field.
+            continue
+        payload[name] = getattr(settings, name)
+
+    if isinstance(payload.get("youtrack_url"), str):
+        payload["youtrack_url"] = payload["youtrack_url"].rstrip("/")
+
+    if "schema_version" not in payload:
+        payload["schema_version"] = SCHEMA_VERSION
+
+    text = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False)
+    tmp.write_text(text + "\n", encoding="utf-8")
+    try:
+        os.replace(tmp, target)
+    except OSError:
+        # Leave the prior good `target` (if any) untouched; remove the
+        # half-written `.tmp` so the working folder doesn't accumulate
+        # stale temp files.
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        raise

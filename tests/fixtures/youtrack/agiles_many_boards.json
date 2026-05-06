@@ -1,0 +1,22 @@
+[
+  {
+    "id": "121-3",
+    "name": "PROJ Scrum",
+    "projects": [{"id": "0-7", "shortName": "PROJ"}],
+    "sprints": [
+      {"id": "121-318", "name": "Sprint 42", "start": 1743984000000, "finish": 1746489600000, "archived": false}
+    ]
+  },
+  {
+    "id": "121-4",
+    "name": "PROJ Kanban",
+    "projects": [{"id": "0-7", "shortName": "PROJ"}],
+    "sprints": []
+  },
+  {
+    "id": "121-5",
+    "name": "OTHER Scrum",
+    "projects": [{"id": "0-9", "shortName": "OTHER"}],
+    "sprints": []
+  }
+]

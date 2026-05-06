@@ -1,37 +1,143 @@
 """Orchestration: run one recap end-to-end.
 
-Iteration-1 happy path:
-    cwd → init logger (console only) → read token → load settings (must
-    exist; missing → friendly error pointing at the contract) → find
-    template → build YouTrack client → fetch boards → pick most-recently
-    sprint (latest by end date) → fetch issues → build agenda plan → derive
-    output and log paths → attach file handler (replays buffered records)
-    → render deck (handling FR-004 overwrite prompt) → write
-    cross-reference list → run footer.
+Happy paths after Iteration 2:
+    cwd → detect prompt mode → read token (FR-016 — surface via active
+    prompt mode if missing) → init dual-sink logger → load settings; if
+    missing, run `first_time_setup` against the live YouTrack instance
+    and save sprint-recap.json atomically (no token; FR-006/FR-016) →
+    find template → build YouTrack client → reuse boards from setup or
+    fetch → pick most-recent sprint (latest by end date) → fetch issues
+    → build agenda plan → derive output and log paths → attach file
+    handler (replays buffered records) → render deck (handling FR-004
+    overwrite prompt) → write cross-reference list → run footer.
 
 On any error we log an ERROR line and abort *before* touching an
-existing good output (FR-014). The token never appears in any logged or
-raised string; the redaction filter is a defense-in-depth backstop.
+existing good output (FR-014) and *without* writing a settings file
+(FR-005, FR-014). The token never appears in any logged or raised
+string; the redaction filter is a defense-in-depth backstop.
 """
 
 from __future__ import annotations
 
 import logging
 import sys
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from sprint_recap import classify, config, deck, logging_setup, naming, prompts
 from sprint_recap.models import AgendaPlan, SavedSettings, Sprint
-from sprint_recap.youtrack import Board, YouTrackClient, YouTrackError
+from sprint_recap.youtrack import Board, Project, YouTrackClient, YouTrackError
 
 
-def _setup_message(working_folder: Path) -> str:
-    return (
-        f"No `sprint-recap.json` found in {working_folder}. Either create "
-        "one matching `specs/001-sprint-recap-deck/contracts/settings-file.md` "
-        "or wait for first-time setup (Iteration 2)."
+def _validate_youtrack_url(raw: str) -> str:
+    url = raw.strip().rstrip("/")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(f"YouTrack URL must use http(s) and have a host: {raw!r}")
+    return url
+
+
+def _resolve_project(client: YouTrackClient, logger: logging.Logger) -> Project:
+    """Loop the project prompt until exactly one visible project resolves
+    or the user cancels (raises ValueError). Re-prompts on 0/many."""
+    while True:
+        query = prompts.prompt_text("Project (short name or full name, e.g. PROJ):")
+        if not query:
+            raise ValueError("First-time setup cancelled at project prompt.")
+        logger.info("setup: project query = %r", query)
+        matches = client.verify_project(query)
+        if not matches:
+            logger.warning("setup: no project matches %r — try again or cancel.", query)
+            continue
+        if len(matches) == 1:
+            return matches[0]
+        labels = [f"{p.short_name} — {p.name} (id={p.id})" for p in matches]
+        chosen = prompts.prompt_choice(
+            f"Multiple projects matched {query!r}; pick one:", labels
+        )
+        if chosen is None:
+            raise ValueError("First-time setup cancelled at project disambiguation.")
+        return matches[labels.index(chosen)]
+
+
+def _resolve_board(
+    client: YouTrackClient,
+    project: Project,
+    logger: logging.Logger,
+) -> tuple[Board, list[Board]]:
+    """Resolve the agile board for `project`. Defaults if there is exactly
+    one; prompts if many; raises YouTrackError (FR-005 edge case) if zero.
+
+    Returns (chosen_board, full_boards_response) so the orchestrator can
+    reuse the agile-boards response without a second round-trip."""
+    boards = client.list_agile_boards()
+    matching = [b for b in boards if project.id in b.project_ids]
+    if not matching:
+        raise YouTrackError(
+            f"No Agile boards visible for project {project.short_name!r} — "
+            "ask an admin or check the token's permissions."
+        )
+    if len(matching) == 1:
+        board = matching[0]
+        logger.info("setup: board = %s (id=%s) [auto: only one]", board.name, board.id)
+        return board, boards
+    labels = [f"{b.name} (id={b.id})" for b in matching]
+    chosen = prompts.prompt_choice("Pick the Agile board:", labels)
+    if chosen is None:
+        raise ValueError("First-time setup cancelled at board prompt.")
+    board = matching[labels.index(chosen)]
+    logger.info("setup: board = %s (id=%s)", board.name, board.id)
+    return board, boards
+
+
+def first_time_setup(
+    working_folder: Path,
+    token: str,
+    *,
+    logger: logging.Logger,
+) -> tuple[SavedSettings, list[Board]]:
+    """Walk the user through URL → project → board, verify against the
+    live YouTrack instance, and save the non-token settings atomically.
+
+    Returns the just-saved `SavedSettings` and the agile-boards response
+    so the caller continues into the recap flow without a second
+    round-trip (T027 / quickstart.md). On *any* error path settings are
+    NOT persisted (FR-005, FR-014).
+    """
+    raw_url = prompts.prompt_text(
+        "YouTrack URL (e.g. https://youtrack.example.com):"
     )
+    if not raw_url:
+        raise ValueError("First-time setup cancelled at YouTrack URL prompt.")
+    url = _validate_youtrack_url(raw_url)
+    logger.info("setup: youtrack_url = %s", url)
+
+    client = YouTrackClient(url, token)
+    project = _resolve_project(client, logger)
+    logger.info(
+        "setup: project = %s (id=%s, name=%r)",
+        project.short_name,
+        project.id,
+        project.name,
+    )
+
+    board, boards = _resolve_board(client, project, logger)
+
+    settings = SavedSettings(
+        youtrack_url=url,
+        project_id=project.id,
+        project_short_name=project.short_name,
+        board_id=board.id,
+        board_name=board.name,
+        last_sprint_id=None,
+        issue_type_filter="all",
+        schema_version=1,
+    )
+    config.save_settings(working_folder, settings)
+    logger.info("setup: settings saved to %s", working_folder / "sprint-recap.json")
+    return settings, boards
 
 
 def _pick_default_sprint(boards: list[Board], settings: SavedSettings) -> Sprint:
@@ -71,14 +177,14 @@ def main() -> int:
     working_folder = Path.cwd()
     prompt_mode = prompts.detect_prompt_mode()
 
-    # Read the token *before* configuring the logger so the redaction filter
-    # is wired from the first record. If the token is missing we cannot log
-    # to a file (no output stem yet) — surface the FR-016 error on stderr
-    # and return.
+    # FR-016: read the token first so the redaction filter wraps every
+    # log record from line one. If it's missing, surface the error in
+    # whichever prompt mode is active and abort BEFORE any HTTP call and
+    # BEFORE any settings write (FR-014).
     try:
         token = config.read_token()
     except EnvironmentError as e:
-        sys.stderr.write(f"{e}\n")
+        prompts.show_error(str(e))
         return 1
 
     logger = logging_setup.init_logger(token=token)
@@ -88,8 +194,12 @@ def main() -> int:
 
     try:
         settings = config.load_settings(working_folder)
+        boards: Optional[list[Board]] = None
         if settings is None:
-            raise EnvironmentError(_setup_message(working_folder))
+            logger.info("No sprint-recap.json found — running first-time setup.")
+            settings, boards = first_time_setup(
+                working_folder, token, logger=logger
+            )
 
         logger.info(
             "youtrack_url = %s",
@@ -109,7 +219,8 @@ def main() -> int:
         template_path = prompts.find_template(working_folder)
 
         client = YouTrackClient(settings.youtrack_url, token)
-        boards = client.list_agile_boards()
+        if boards is None:
+            boards = client.list_agile_boards()
         sprint = _pick_default_sprint(boards, settings)
 
         logger.info(

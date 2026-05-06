@@ -104,6 +104,79 @@ def prompt_choice(label: str, options: Sequence[str]) -> Optional[str]:
     return _tkinter_choice(label, options)
 
 
+def prompt_text(
+    label: str,
+    default: Optional[str] = None,
+    secret: bool = False,
+) -> Optional[str]:
+    """Free-text prompt (e.g. YouTrack URL, project short name).
+
+    Returns the trimmed string the user typed, or None if they cancelled
+    or left the field empty. The token is NEVER prompted — `secret=True`
+    is reserved for any future use and is honored only by switching to
+    `getpass`/masked input; FR-016 requires the token to come from the
+    environment.
+    """
+    mode = detect_prompt_mode()
+    if mode == "console":
+        suffix = f" [{default}]" if default else ""
+        if secret:
+            from getpass import getpass
+
+            raw = getpass(f"{label}{suffix} ")
+        else:
+            raw = input(f"{label}{suffix} ")
+        raw = raw.strip()
+        if not raw:
+            return default if default else None
+        return raw
+
+    import tkinter as tk
+    from tkinter import simpledialog
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        raw = simpledialog.askstring(
+            "sprint-recap",
+            label,
+            initialvalue=default or "",
+            show="*" if secret else None,
+        )
+    finally:
+        root.destroy()
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if not raw:
+        return default if default else None
+    return raw
+
+
+def show_error(message: str) -> None:
+    """Surface a fatal error in whichever prompt mode is active.
+
+    Console: writes a single line to stderr.
+    Tkinter: shows a `messagebox.showerror` dialog so a double-click user
+    actually sees the failure (otherwise the program appears to do
+    nothing). Used by the FR-016 missing-token path and other abort
+    surfaces during first-time setup.
+    """
+    mode = detect_prompt_mode()
+    if mode == "console":
+        sys.stderr.write(message + "\n")
+        return
+    import tkinter as tk
+    from tkinter import messagebox
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        messagebox.showerror("sprint-recap", message)
+    finally:
+        root.destroy()
+
+
 def find_template(working_folder: Path) -> Path:
     """Locate the pptx template in the working folder per FR-002.
 
