@@ -19,16 +19,36 @@ string; the redaction filter is a defense-in-depth backstop.
 
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from sprint_recap import classify, config, deck, logging_setup, naming, prompts
 from sprint_recap.models import AgendaPlan, SavedSettings, Sprint
 from sprint_recap.youtrack import Board, Project, YouTrackClient, YouTrackError
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    """Parse CLI args. Iteration 3 introduces a single boolean flag.
+
+    The default no-arg flow keeps the FR-007 latest-by-end-date sprint;
+    ``--pick-sprint`` flips orchestration into the picker (US3).
+    """
+    parser = argparse.ArgumentParser(
+        prog="sprint_recap",
+        description="Generate the sprint recap deck for the configured board.",
+    )
+    parser.add_argument(
+        "--pick-sprint",
+        action="store_true",
+        dest="pick_sprint",
+        help="Pick a sprint from the configured board instead of the latest.",
+    )
+    return parser.parse_args(argv)
 
 
 def _validate_youtrack_url(raw: str) -> str:
@@ -171,8 +191,36 @@ def _write_cross_reference(
         log.info("  %s | open     | %s", issue.id_readable, issue.title)
 
 
-def main() -> int:
+def _pick_sprint_interactively(
+    boards: list[Board], settings: SavedSettings, logger: logging.Logger
+) -> Sprint:
+    """Run the US3 picker against the configured board's sprints. Raises
+    ValueError if the user cancels — caller surfaces that as the standard
+    cancel-aborts-without-writing-files path."""
+    board = next((b for b in boards if b.id == settings.board_id), None)
+    if board is None:
+        raise YouTrackError(
+            f"Board {settings.board_name!r} (id={settings.board_id}) is no longer "
+            "visible to this token. Re-run first-time setup or fix `sprint-recap.json`."
+        )
+    if not board.sprints:
+        raise YouTrackError(
+            f"Board {settings.board_name!r} has no dated sprints; nothing to recap."
+        )
+    chosen = prompts.prompt_sprint(board.sprints)
+    if chosen is None:
+        raise ValueError("User cancelled at sprint picker; aborting.")
+    logger.info(
+        "sprint_picker = %s (id=%s) [user-selected]",
+        chosen.name,
+        chosen.id,
+    )
+    return chosen
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
     """Returns 0 on success, 1 on error. Never raises out of main."""
+    args = parse_args(argv)
     started = datetime.now()
     working_folder = Path.cwd()
     prompt_mode = prompts.detect_prompt_mode()
@@ -221,7 +269,11 @@ def main() -> int:
         client = YouTrackClient(settings.youtrack_url, token)
         if boards is None:
             boards = client.list_agile_boards()
-        sprint = _pick_default_sprint(boards, settings)
+
+        if args.pick_sprint:
+            sprint = _pick_sprint_interactively(boards, settings, logger)
+        else:
+            sprint = _pick_default_sprint(boards, settings)
 
         logger.info(
             "sprint = %s (id=%s) %s → %s",

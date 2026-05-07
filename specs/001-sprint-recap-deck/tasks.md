@@ -102,15 +102,15 @@ Single-project Python desktop application. Source under `sprint_recap/`, tests u
 
 ### Tests for User Story 3 (write FIRST, must fail before implementation) ⚠️
 
-- [ ] T030 [P] [US3] Extend `tests/unit/test_prompts.py` with sprint-picker test: given a list of `Sprint` records, the picker presents them sorted by end date descending (most recent first) with each line showing `name (YYYY-MM-DD → YYYY-MM-DD)`; selection returns the chosen `Sprint`; cancel returns the cancel sentinel.
-- [ ] T031 [P] [US3] Add a CLI-args test in `tests/unit/test_app_args.py`: parsing `--pick-sprint` sets the orchestration into pick-sprint mode; bare invocation (no args) keeps the default flow.
+- [X] T030 [P] [US3] Extend `tests/unit/test_prompts.py` with sprint-picker test: given a list of `Sprint` records, the picker presents them sorted by end date descending (most recent first) with each line showing `name (YYYY-MM-DD → YYYY-MM-DD)`; selection returns the chosen `Sprint`; cancel returns the cancel sentinel.
+- [X] T031 [P] [US3] Add a CLI-args test in `tests/unit/test_app_args.py`: parsing `--pick-sprint` sets the orchestration into pick-sprint mode; bare invocation (no args) keeps the default flow.
 
 ### Implementation for User Story 3
 
-- [ ] T032 [US3] Add CLI flag handling to `sprint_recap/app.py` using `argparse` (stdlib): single `--pick-sprint` boolean flag (no other flags in scope for v1). Default flow unchanged.
-- [ ] T033 [US3] Add `prompt_sprint(sprints) -> Sprint | None` to `sprint_recap/prompts.py`: console mode renders a numbered list `name (start_iso → end_iso)`; tkinter mode renders a `Listbox` with the same labels; sorted by end date descending (latest first) so the FR-007 default sprint is at index 0 visually.
-- [ ] T034 [US3] Wire the picker into `sprint_recap/app.py`: when `--pick-sprint` is set, after settings/board are resolved, call `prompt_sprint(board.sprints)` (using the already-fetched sprints from the agile-boards response — no extra round-trip); on cancel, abort without writing files; on selection, use that sprint instead of the FR-007 default. Log the chosen sprint id and name per `contracts/log-file.md` §10.
-- [ ] T035 [US3] Manual-handoff summary: state to the user that `python sprint_recap.py --pick-sprint` now opens a sprint picker showing every sprint on the configured board with its dates, and produces a deck for the chosen one. Walk through US3 acceptance scenarios as the verification recipe. Do NOT run the program — the user drives verification.
+- [X] T032 [US3] Add CLI flag handling to `sprint_recap/app.py` using `argparse` (stdlib): single `--pick-sprint` boolean flag (no other flags in scope for v1). Default flow unchanged.
+- [X] T033 [US3] Add `prompt_sprint(sprints) -> Sprint | None` to `sprint_recap/prompts.py`: console mode renders a numbered list `name (start_iso → end_iso)`; tkinter mode renders a `Listbox` with the same labels; sorted by end date descending (latest first) so the FR-007 default sprint is at index 0 visually.
+- [X] T034 [US3] Wire the picker into `sprint_recap/app.py`: when `--pick-sprint` is set, after settings/board are resolved, call `prompt_sprint(board.sprints)` (using the already-fetched sprints from the agile-boards response — no extra round-trip); on cancel, abort without writing files; on selection, use that sprint instead of the FR-007 default. Log the chosen sprint id and name per `contracts/log-file.md` §10.
+- [X] T035 [US3] Manual-handoff summary: state to the user that `python sprint_recap.py --pick-sprint` now opens a sprint picker showing every sprint on the configured board with its dates, and produces a deck for the chosen one. Walk through US3 acceptance scenarios as the verification recipe. Do NOT run the program — the user drives verification.
 
 **Checkpoint (Iteration 3)**: All three user stories are exercisable end-to-end. The user verifies the picker UX in both prompt modes and confirms cancel writes nothing. The user decides whether to proceed to Polish.
 

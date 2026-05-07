@@ -12,7 +12,10 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
-from typing import Literal, Optional, Sequence
+from typing import Literal, Optional, Sequence, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sprint_recap.models import Sprint
 
 _log = logging.getLogger(__name__)
 
@@ -237,6 +240,29 @@ def find_template(working_folder: Path) -> Path:
     chosen = pptx_files[labels.index(chosen_label)]
     _log.info("template = %s", chosen)
     return chosen
+
+
+def prompt_sprint(sprints: Sequence["Sprint"]) -> Optional["Sprint"]:
+    """Pick a sprint from the configured board (T033 / US3 / FR-007).
+
+    Sprints are presented sorted by end date *descending* so the
+    latest-by-end-date sprint (the FR-007 default) is at index 0
+    visually. Each entry is rendered as ``name (start_iso → end_iso)``.
+
+    Returns the chosen ``Sprint`` or ``None`` if the user cancelled. The
+    caller must abort without writing files on cancel (Iteration 3
+    Independent Test).
+    """
+    if not sprints:
+        return None
+    ordered = sorted(sprints, key=lambda s: s.end, reverse=True)
+    labels = [
+        f"{s.name} ({s.start.isoformat()} → {s.end.isoformat()})" for s in ordered
+    ]
+    chosen_label = prompt_choice("Pick a sprint to recap:", labels)
+    if chosen_label is None:
+        return None
+    return ordered[labels.index(chosen_label)]
 
 
 def confirm_overwrite(path: Path) -> OverwriteChoice:

@@ -21,7 +21,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from datetime import date
+
 from sprint_recap import prompts
+from sprint_recap.models import Sprint
 
 
 @pytest.fixture(autouse=True)
@@ -252,3 +255,127 @@ def test_tkinter_prompt_text_cancel_returns_none(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setitem(_sys.modules, "tkinter.simpledialog", fake_simpledialog)
 
     assert prompts.prompt_text("Project:") is None
+
+
+# ---------------------------------------------------------------------------
+# prompt_sprint (T030 / Iteration 3 / US3)
+# ---------------------------------------------------------------------------
+
+
+def _sprint(id_: str, name: str, start: date, end: date) -> Sprint:
+    return Sprint(id=id_, name=name, start=start, end=end, archived=False)
+
+
+def test_prompt_sprint_orders_by_end_date_descending(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Latest-by-end-date sprint appears first so the FR-007 default is at
+    index 0 visually. Each line shows ``name (start_iso → end_iso)``."""
+    monkeypatch.setattr(prompts.sys.stdin, "isatty", lambda: True)
+    sprints = [
+        _sprint("121-1", "Sprint 40", date(2026, 2, 1), date(2026, 3, 1)),
+        _sprint("121-2", "Sprint 41", date(2026, 3, 2), date(2026, 4, 7)),
+        _sprint("121-3", "Sprint 42", date(2026, 4, 8), date(2026, 5, 5)),
+    ]
+    monkeypatch.setattr("builtins.input", lambda _: "1")
+
+    chosen = prompts.prompt_sprint(sprints)
+
+    assert chosen is sprints[2], "latest-by-end-date sprint must be index 0"
+    out = capsys.readouterr().out
+    s42_pos = out.index("Sprint 42 (2026-04-08 → 2026-05-05)")
+    s41_pos = out.index("Sprint 41 (2026-03-02 → 2026-04-07)")
+    s40_pos = out.index("Sprint 40 (2026-02-01 → 2026-03-01)")
+    assert s42_pos < s41_pos < s40_pos
+
+
+def test_prompt_sprint_returns_selected_sprint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(prompts.sys.stdin, "isatty", lambda: True)
+    sprints = [
+        _sprint("121-1", "Sprint 40", date(2026, 2, 1), date(2026, 3, 1)),
+        _sprint("121-2", "Sprint 41", date(2026, 3, 2), date(2026, 4, 7)),
+        _sprint("121-3", "Sprint 42", date(2026, 4, 8), date(2026, 5, 5)),
+    ]
+    # After sorting by end-date desc, index 2 in the prompt list is Sprint 40.
+    monkeypatch.setattr("builtins.input", lambda _: "3")
+    chosen = prompts.prompt_sprint(sprints)
+    assert chosen is sprints[0]
+
+
+def test_prompt_sprint_single_sprint_still_prompts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With one closed sprint the picker still appears (per Independent
+    Test in tasks.md / Iteration 3)."""
+    monkeypatch.setattr(prompts.sys.stdin, "isatty", lambda: True)
+    only = _sprint("121-9", "Sprint 1", date(2026, 1, 1), date(2026, 1, 31))
+    monkeypatch.setattr("builtins.input", lambda _: "1")
+    assert prompts.prompt_sprint([only]) is only
+
+
+def test_prompt_sprint_cancel_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(prompts.sys.stdin, "isatty", lambda: True)
+    sprints = [
+        _sprint("121-1", "Sprint 40", date(2026, 2, 1), date(2026, 3, 1)),
+    ]
+    monkeypatch.setattr("builtins.input", lambda _: "0")
+    assert prompts.prompt_sprint(sprints) is None
+
+
+def test_prompt_sprint_empty_list_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(prompts.sys.stdin, "isatty", lambda: True)
+    assert prompts.prompt_sprint([]) is None
+
+
+def test_prompt_sprint_tkinter_uses_listbox(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(prompts.sys.stdin, "isatty", lambda: False)
+    sprints = [
+        _sprint("121-1", "Sprint 40", date(2026, 2, 1), date(2026, 3, 1)),
+        _sprint("121-2", "Sprint 41", date(2026, 3, 2), date(2026, 4, 7)),
+    ]
+
+    fake_tk = MagicMock()
+    fake_messagebox = MagicMock()
+    fake_listbox = MagicMock()
+    fake_listbox.curselection.return_value = (0,)  # latest-by-end-date
+    fake_tk.Listbox.return_value = fake_listbox
+
+    captured: dict[str, Any] = {"confirm": None, "cancel": None}
+
+    def capture_button(parent, text, command, **kw):  # noqa: ARG001
+        if text == "OK":
+            captured["confirm"] = command
+        elif text == "Cancel":
+            captured["cancel"] = command
+        return MagicMock()
+
+    fake_tk.Button.side_effect = capture_button
+
+    def fake_wait_window(_top: Any) -> None:
+        captured["confirm"]()
+
+    fake_root = MagicMock()
+    fake_root.wait_window.side_effect = fake_wait_window
+    fake_tk.Tk.return_value = fake_root
+    fake_tk.Toplevel.return_value = MagicMock()
+    fake_tk.END = "end"
+    fake_tk.LEFT = "left"
+    fake_tk.BOTH = "both"
+    fake_tk.Frame.return_value = MagicMock()
+    fake_tk.Label.return_value = MagicMock()
+
+    import sys as _sys
+
+    monkeypatch.setitem(_sys.modules, "tkinter", fake_tk)
+    monkeypatch.setitem(_sys.modules, "tkinter.messagebox", fake_messagebox)
+
+    chosen = prompts.prompt_sprint(sprints)
+    assert chosen is sprints[1]  # Sprint 41 (latest by end date)
+
+    inserted_labels = [c.args[1] for c in fake_listbox.insert.call_args_list]
+    assert inserted_labels == [
+        "Sprint 41 (2026-03-02 → 2026-04-07)",
+        "Sprint 40 (2026-02-01 → 2026-03-01)",
+    ]
