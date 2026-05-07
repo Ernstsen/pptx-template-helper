@@ -72,6 +72,44 @@ To make the variable persist across sessions on Windows, set it via
    accompanied by `<output-stem>.log`. The original template is
    untouched.
 
+## Editing the issue-type filter
+
+The agenda defaults to **every** issue in the sprint. To narrow the deck
+to specific YouTrack issue types (e.g. only `Story` and `Bug`), hand-edit
+the `issue_type_filter` field of `sprint-recap.json` between runs (FR-018).
+
+```jsonc
+{
+  // ...
+  "issue_type_filter": "all"            // default — no filtering
+}
+```
+
+```jsonc
+{
+  // ...
+  "issue_type_filter": ["Story", "Bug"] // only these types appear on the agenda
+}
+```
+
+Rules:
+
+- **Default `"all"`** means no filtering: every retrieved issue is
+  classified Finished/Open and placed on the agenda.
+- **Array of strings** is an inclusion list compared case-insensitively
+  against each issue's `Type` custom field. Issues with a non-matching
+  `Type` are dropped before the Finished/Open split (and so are absent
+  from the cross-reference list in the log).
+- **Empty array `[]`** is treated as `"all"` and a `WARN` line is
+  written to the per-run log so the change is auditable. Use `"all"`
+  explicitly if that's what you want.
+- The filter does not affect FR-019 subtask collapse: a parent that is
+  filtered out still suppresses its in-sprint children only via the
+  collapse rule (`is_subtask_to_collapse`), not via the filter.
+
+The filter is the only field of `sprint-recap.json` you should hand-edit
+between runs. All other fields are program-managed.
+
 ## Tests
 
 ```bash
