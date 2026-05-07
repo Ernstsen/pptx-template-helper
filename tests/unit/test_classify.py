@@ -39,7 +39,7 @@ def test_finished_iff_resolved_at_is_not_none() -> None:
         _issue("PROJ-2", resolved=None),
     ]
     plan = build_agenda_plan(issues, type_filter="all")
-    assert [i.id_readable for i in plan.finished] == ["PROJ-1"]
+    assert [i.id_readable for i in plan.no_demo] == ["PROJ-1"]
     assert [i.id_readable for i in plan.open] == ["PROJ-2"]
 
 
@@ -49,7 +49,7 @@ def test_classification_does_not_inspect_state_name_strings() -> None:
         _issue("PROJ-3", title="Done: ship the thing", resolved=None),
     ]
     plan = build_agenda_plan(issues, type_filter="all")
-    assert plan.finished == []
+    assert plan.no_demo == []
     assert [i.id_readable for i in plan.open] == ["PROJ-3"]
 
 
@@ -60,7 +60,7 @@ def test_finished_sort_by_resolved_then_id_ascending() -> None:
         _issue("PROJ-3", resolved=_utc(2026, 4, 10, 10)),
     ]
     plan = build_agenda_plan(issues, type_filter="all")
-    assert [i.id_readable for i in plan.finished] == ["PROJ-1", "PROJ-2", "PROJ-3"]
+    assert [i.id_readable for i in plan.no_demo] == ["PROJ-1", "PROJ-2", "PROJ-3"]
 
 
 def test_open_sort_by_created_then_id_ascending() -> None:
@@ -80,7 +80,7 @@ def test_subtask_collapsed_iff_parent_is_in_sprint() -> None:
     plan = build_agenda_plan(
         [parent, in_sprint_subtask, out_of_sprint_subtask], type_filter="all"
     )
-    finished_ids = [i.id_readable for i in plan.finished]
+    finished_ids = [i.id_readable for i in plan.no_demo]
     open_ids = [i.id_readable for i in plan.open]
     assert "PROJ-101" not in finished_ids  # collapsed under parent
     assert "PROJ-100" in finished_ids
@@ -94,7 +94,7 @@ def test_subtask_collapse_uses_full_pre_filter_membership() -> None:
     parent = _issue("PROJ-100", issue_type="Bug", resolved=_utc(2026, 4, 10))
     subtask = _issue("PROJ-101", issue_type="Story", parent="PROJ-100", resolved=None)
     plan = build_agenda_plan([parent, subtask], type_filter=["Story"])
-    assert [i.id_readable for i in plan.finished] == []
+    assert [i.id_readable for i in plan.no_demo] == []
     assert [i.id_readable for i in plan.open] == []  # subtask collapsed by parent
     assert plan.unfiltered_count == 2
     assert plan.filtered_count == 1  # only Story survives the filter
@@ -103,7 +103,8 @@ def test_subtask_collapse_uses_full_pre_filter_membership() -> None:
 
 def test_empty_sprint_yields_empty_plans_with_correct_counts() -> None:
     plan = build_agenda_plan([], type_filter="all")
-    assert plan.finished == []
+    assert plan.demo == []
+    assert plan.no_demo == []
     assert plan.open == []
     assert plan.unfiltered_count == 0
     assert plan.filtered_count == 0
@@ -138,12 +139,13 @@ def test_empty_list_filter_treated_as_all() -> None:
     assert [i.id_readable for i in plan.open] == ["PROJ-1"]
 
 
-def test_invariant_finished_plus_open_equals_filtered_minus_collapsed() -> None:
+def test_invariant_demo_no_demo_open_equals_filtered_minus_collapsed() -> None:
     parent = _issue("PROJ-100", resolved=_utc(2026, 4, 10))
     sub = _issue("PROJ-101", parent="PROJ-100", resolved=None)
     other = _issue("PROJ-200", resolved=None)
     plan = build_agenda_plan([parent, sub, other], type_filter="all")
+    assert plan.demo == []
     assert (
-        len(plan.finished) + len(plan.open)
+        len(plan.demo) + len(plan.no_demo) + len(plan.open)
         == plan.filtered_count - plan.collapsed_subtask_count
     )

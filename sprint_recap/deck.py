@@ -15,8 +15,8 @@ Token substitution (contracts/template-tokens.md):
       first written paragraph reuses the original first run's formatting
       where present so the user's bullet style carries over.
     - Required tokens missing → clear error naming the missing token.
-    - {{AGENDA_FINISHED}} or {{AGENDA_OPEN}} appearing more than once →
-      explicit error.
+    - {{AGENDA_DEMO}}, {{AGENDA_NO_DEMO}}, or {{AGENDA_OPEN}} appearing
+      more than once → explicit error.
 """
 
 from __future__ import annotations
@@ -38,7 +38,8 @@ _MONTHS = [
 ]
 
 DATE_TOKENS = ("{{SPRINT_START}}", "{{SPRINT_END}}", "{{RECAP_DATE}}")
-AGENDA_FINISHED_TOKEN = "{{AGENDA_FINISHED}}"
+AGENDA_DEMO_TOKEN = "{{AGENDA_DEMO}}"
+AGENDA_NO_DEMO_TOKEN = "{{AGENDA_NO_DEMO}}"
 AGENDA_OPEN_TOKEN = "{{AGENDA_OPEN}}"
 
 
@@ -189,15 +190,18 @@ def render_deck(
 
     sprint_start_n = _present("{{SPRINT_START}}")
     sprint_end_n = _present("{{SPRINT_END}}")
-    finished_n = _present(AGENDA_FINISHED_TOKEN)
+    demo_n = _present(AGENDA_DEMO_TOKEN)
+    no_demo_n = _present(AGENDA_NO_DEMO_TOKEN)
     open_n = _present(AGENDA_OPEN_TOKEN)
 
     if sprint_start_n == 0:
         missing.append("{{SPRINT_START}}")
     if sprint_end_n == 0:
         missing.append("{{SPRINT_END}}")
-    if finished_n == 0:
-        missing.append(AGENDA_FINISHED_TOKEN)
+    if demo_n == 0:
+        missing.append(AGENDA_DEMO_TOKEN)
+    if no_demo_n == 0:
+        missing.append(AGENDA_NO_DEMO_TOKEN)
     if open_n == 0:
         missing.append(AGENDA_OPEN_TOKEN)
     if missing:
@@ -205,9 +209,14 @@ def render_deck(
             "Required template tokens missing: " + ", ".join(missing)
         )
 
-    if finished_n > 1:
+    if demo_n > 1:
         raise ValueError(
-            f"Token {AGENDA_FINISHED_TOKEN} appears more than once in the "
+            f"Token {AGENDA_DEMO_TOKEN} appears more than once in the "
+            "template; cannot infer which occurrence wins."
+        )
+    if no_demo_n > 1:
+        raise ValueError(
+            f"Token {AGENDA_NO_DEMO_TOKEN} appears more than once in the "
             "template; cannot infer which occurrence wins."
         )
     if open_n > 1:
@@ -240,13 +249,11 @@ def render_deck(
 
     # --- Agenda substitution (clear + write per issue). ---
     for tf in text_frames:
-        # Recompute presence inside this loop because earlier date-token
-        # replacements may have rewritten the paragraph text. Agenda
-        # tokens are expected to be the sole content of their text frame
-        # per the contract, so the lookup stays exact.
         joined = "\n".join(p.text for p in tf.paragraphs)
-        if AGENDA_FINISHED_TOKEN in joined:
-            _write_agenda(tf, agenda_plan.finished)
+        if AGENDA_DEMO_TOKEN in joined:
+            _write_agenda(tf, agenda_plan.demo)
+        elif AGENDA_NO_DEMO_TOKEN in joined:
+            _write_agenda(tf, agenda_plan.no_demo)
         elif AGENDA_OPEN_TOKEN in joined:
             _write_agenda(tf, agenda_plan.open)
 

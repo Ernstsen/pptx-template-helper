@@ -65,7 +65,8 @@ def build_agenda_plan(
     )
 
     return AgendaPlan(
-        finished=finished,
+        demo=[],
+        no_demo=finished,
         open=open_,
         unfiltered_count=unfiltered_count,
         filtered_count=filtered_count,

@@ -9,13 +9,14 @@ same facade.
 
 from __future__ import annotations
 
+import curses
 import logging
 import sys
 from pathlib import Path
 from typing import Literal, Optional, Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sprint_recap.models import Sprint
+    from sprint_recap.models import Sprint, SprintIssue
 
 _log = logging.getLogger(__name__)
 
@@ -279,3 +280,103 @@ def confirm_overwrite(path: Path) -> OverwriteChoice:
     if pick == "overwrite":
         return "overwrite"
     return "save_as"
+
+
+def _console_demo_selection(finished: Sequence["SprintIssue"]) -> set[str]:
+    selected: set[int] = set()
+    current = 0
+    items = list(finished)
+
+    def draw(stdscr: curses.window) -> set[str]:
+        nonlocal current
+        curses.curs_set(0)
+        while True:
+            stdscr.clear()
+            height, width = stdscr.getmaxyx()
+            stdscr.addnstr(0, 0, "Select issues to demo (Space=toggle, Enter=confirm, q=cancel)", width - 1)
+            for idx, issue in enumerate(items):
+                if idx + 2 >= height:
+                    break
+                marker = "[x]" if idx in selected else "[ ]"
+                line = f"{marker} {issue.id_readable}  {issue.title}"
+                attr = curses.A_REVERSE if idx == current else 0
+                stdscr.addnstr(idx + 2, 0, line, width - 1, attr)
+            stdscr.refresh()
+            key = stdscr.getch()
+            if key == ord("q"):
+                raise ValueError("User cancelled demo selection.")
+            if key in (curses.KEY_UP, ord("k")):
+                current = max(0, current - 1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                current = min(len(items) - 1, current + 1)
+            elif key == ord(" "):
+                if current in selected:
+                    selected.discard(current)
+                else:
+                    selected.add(current)
+            elif key in (curses.KEY_ENTER, 10, 13):
+                return {items[i].id_readable for i in selected}
+
+    return curses.wrapper(draw)
+
+
+def _tkinter_demo_selection(finished: Sequence["SprintIssue"]) -> set[str]:
+    import tkinter as tk
+
+    root = tk.Tk()
+    root.withdraw()
+    top = tk.Toplevel(root)
+    top.title("sprint-recap — demo selection")
+
+    tk.Label(top, text="Select resolved issues to demo:").pack(padx=8, pady=8)
+
+    container = tk.Frame(top)
+    container.pack(padx=8, pady=4, fill=tk.BOTH, expand=True)
+    canvas = tk.Canvas(container)
+    scrollbar = tk.Scrollbar(container, orient=tk.VERTICAL, command=canvas.yview)
+    inner = tk.Frame(canvas)
+    inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    canvas.create_window((0, 0), window=inner, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    vars_: list[tuple[str, tk.BooleanVar]] = []
+    for issue in finished:
+        var = tk.BooleanVar(value=False)
+        tk.Checkbutton(inner, text=f"{issue.id_readable}  {issue.title}", variable=var, anchor="w").pack(
+            fill=tk.X, padx=4, pady=1
+        )
+        vars_.append((issue.id_readable, var))
+
+    result: dict[str, set[str] | None] = {"value": None}
+
+    def confirm() -> None:
+        result["value"] = {id_ for id_, var in vars_ if var.get()}
+        top.destroy()
+
+    def cancel() -> None:
+        top.destroy()
+
+    button_frame = tk.Frame(top)
+    button_frame.pack(pady=4)
+    tk.Button(button_frame, text="OK", command=confirm).pack(side=tk.LEFT, padx=4)
+    tk.Button(button_frame, text="Cancel", command=cancel).pack(side=tk.LEFT, padx=4)
+
+    top.protocol("WM_DELETE_WINDOW", cancel)
+    top.grab_set()
+    root.wait_window(top)
+    root.destroy()
+
+    if result["value"] is None:
+        raise ValueError("User cancelled demo selection.")
+    return result["value"]
+
+
+def prompt_demo_selection(finished: Sequence["SprintIssue"]) -> set[str]:
+    if not finished:
+        return set()
+    mode = detect_prompt_mode()
+    if mode == "console":
+        return _console_demo_selection(finished)
+    return _tkinter_demo_selection(finished)

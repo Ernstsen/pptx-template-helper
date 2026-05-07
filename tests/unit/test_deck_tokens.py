@@ -40,8 +40,10 @@ def _issue(id_: str, title: str, resolved: bool) -> SprintIssue:
 
 def _agenda() -> AgendaPlan:
     return AgendaPlan(
-        finished=[
+        demo=[
             _issue("PROJ-1", "Migrate billing service to v3", resolved=True),
+        ],
+        no_demo=[
             _issue("PROJ-2", "Hot-patch invoice rounding", resolved=True),
         ],
         open=[
@@ -80,6 +82,9 @@ def test_render_deck_substitutes_date_tokens_in_place(tmp_path: Path) -> None:
     assert "{{SPRINT_START}}" not in joined
     assert "{{SPRINT_END}}" not in joined
     assert "{{RECAP_DATE}}" not in joined
+    assert "{{AGENDA_DEMO}}" not in joined
+    assert "{{AGENDA_NO_DEMO}}" not in joined
+    assert "{{AGENDA_OPEN}}" not in joined
 
 
 def test_render_deck_writes_one_paragraph_per_issue_in_order(tmp_path: Path) -> None:
@@ -90,18 +95,18 @@ def test_render_deck_writes_one_paragraph_per_issue_in_order(tmp_path: Path) -> 
     render_deck(template, output, _sprint(), _agenda())
 
     prs = Presentation(str(output))
-    # Slide 2 has the agenda boxes (per fixture _build_template.py).
+    # Slide 2 has three agenda boxes (per fixture _build_template.py).
     slide2 = prs.slides[1]
-    finished_box = slide2.shapes[0]
-    open_box = slide2.shapes[1]
+    demo_box = slide2.shapes[0]
+    no_demo_box = slide2.shapes[1]
+    open_box = slide2.shapes[2]
 
-    finished_paragraphs = [p.text for p in finished_box.text_frame.paragraphs]
+    demo_paragraphs = [p.text for p in demo_box.text_frame.paragraphs]
+    no_demo_paragraphs = [p.text for p in no_demo_box.text_frame.paragraphs]
     open_paragraphs = [p.text for p in open_box.text_frame.paragraphs]
 
-    assert finished_paragraphs == [
-        "Migrate billing service to v3",
-        "Hot-patch invoice rounding",
-    ]
+    assert demo_paragraphs == ["Migrate billing service to v3"]
+    assert no_demo_paragraphs == ["Hot-patch invoice rounding"]
     assert open_paragraphs == ["Investigate p99 latency on report API"]
 
 
@@ -124,7 +129,7 @@ def test_render_deck_raises_when_required_token_missing(tmp_path: Path) -> None:
     template = tmp_path / "Recap-Template.pptx"
     shutil.copy(FIXTURE, template)
 
-    # Strip {{AGENDA_FINISHED}} from the copy by replacing it with empty text.
+    # Strip {{AGENDA_DEMO}} from the copy by replacing it with empty text.
     prs = Presentation(str(template))
     slide2 = prs.slides[1]
     slide2.shapes[0].text_frame.text = "(removed)"
@@ -133,28 +138,28 @@ def test_render_deck_raises_when_required_token_missing(tmp_path: Path) -> None:
     output = tmp_path / "out.pptx"
     with pytest.raises(Exception) as exc:
         render_deck(template, output, _sprint(), _agenda())
-    assert "{{AGENDA_FINISHED}}" in str(exc.value)
+    assert "{{AGENDA_DEMO}}" in str(exc.value)
 
 
 def test_render_deck_raises_on_duplicate_agenda_token(tmp_path: Path) -> None:
-    """Duplicate {{AGENDA_FINISHED}} → explicit error (template-tokens contract)."""
+    """Duplicate {{AGENDA_DEMO}} → explicit error (template-tokens contract)."""
     from pptx.util import Inches
 
     template = tmp_path / "Recap-Template.pptx"
     shutil.copy(FIXTURE, template)
 
-    # Add a third text box also containing {{AGENDA_FINISHED}} so the
+    # Add an extra text box also containing {{AGENDA_DEMO}} so the
     # required-token-presence check passes but the cardinality check fails.
     prs = Presentation(str(template))
     slide2 = prs.slides[1]
     extra = slide2.shapes.add_textbox(Inches(0), Inches(0), Inches(2), Inches(1))
-    extra.text_frame.text = "{{AGENDA_FINISHED}}"
+    extra.text_frame.text = "{{AGENDA_DEMO}}"
     prs.save(str(template))
 
     output = tmp_path / "out.pptx"
     with pytest.raises(Exception) as exc:
         render_deck(template, output, _sprint(), _agenda())
     msg = str(exc.value)
-    assert "{{AGENDA_FINISHED}}" in msg and (
+    assert "{{AGENDA_DEMO}}" in msg and (
         "duplicate" in msg.lower() or "more than once" in msg.lower()
     )

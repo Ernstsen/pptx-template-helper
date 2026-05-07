@@ -185,10 +185,12 @@ def _write_cross_reference(
     log: logging.Logger, plan: AgendaPlan
 ) -> None:
     log.info("agenda:")
-    for issue in plan.finished:
-        log.info("  %s | finished | %s", issue.id_readable, issue.title)
+    for issue in plan.demo:
+        log.info("  %s | demo    | %s", issue.id_readable, issue.title)
+    for issue in plan.no_demo:
+        log.info("  %s | no-demo | %s", issue.id_readable, issue.title)
     for issue in plan.open:
-        log.info("  %s | open     | %s", issue.id_readable, issue.title)
+        log.info("  %s | open    | %s", issue.id_readable, issue.title)
 
 
 def _pick_sprint_interactively(
@@ -297,9 +299,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         plan = classify.build_agenda_plan(issues, settings.issue_type_filter)
         logger.info("filtered_count = %d", plan.filtered_count)
         logger.info("collapsed_subtasks = %d", plan.collapsed_subtask_count)
+
+        if plan.no_demo:
+            demo_ids = prompts.prompt_demo_selection(plan.no_demo)
+            plan.demo = [i for i in plan.no_demo if i.id_readable in demo_ids]
+            plan.no_demo = [i for i in plan.no_demo if i.id_readable not in demo_ids]
+
         logger.info(
-            "finished_count = %d   open_count = %d",
-            len(plan.finished),
+            "demo_count = %d   no_demo_count = %d   open_count = %d",
+            len(plan.demo),
+            len(plan.no_demo),
             len(plan.open),
         )
 

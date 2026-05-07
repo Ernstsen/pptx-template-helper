@@ -65,7 +65,8 @@ class SavedSettings:
 
 @dataclass
 class AgendaPlan:
-    finished: list[SprintIssue] = field(default_factory=list)
+    demo: list[SprintIssue] = field(default_factory=list)
+    no_demo: list[SprintIssue] = field(default_factory=list)
     open: list[SprintIssue] = field(default_factory=list)
     unfiltered_count: int = 0
     filtered_count: int = 0
