@@ -10,3 +10,9 @@ sprint-recap.json
 # committed to keep the test suite reproducible.
 *.pptx
 !tests/fixtures/*.pptx
+
+# PyInstaller build artifacts
+dist/
+build/
+*.spec
+build_venv/

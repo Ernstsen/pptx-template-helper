@@ -29,7 +29,11 @@ def detect_prompt_mode() -> PromptMode:
     """Compute the prompt mode once and cache it (FR-012)."""
     global _PROMPT_MODE
     if _PROMPT_MODE is None:
-        _PROMPT_MODE = "console" if sys.stdin.isatty() else "tkinter"
+        try:
+            is_tty = sys.stdin is not None and sys.stdin.isatty()
+        except AttributeError:
+            is_tty = False
+        _PROMPT_MODE = "console" if is_tty else "tkinter"
     return _PROMPT_MODE
 
 
