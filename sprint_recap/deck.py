@@ -41,6 +41,18 @@ DATE_TOKENS = ("{{SPRINT_START}}", "{{SPRINT_END}}", "{{RECAP_DATE}}")
 AGENDA_DEMO_TOKEN = "{{AGENDA_DEMO}}"
 AGENDA_NO_DEMO_TOKEN = "{{AGENDA_NO_DEMO}}"
 AGENDA_OPEN_TOKEN = "{{AGENDA_OPEN}}"
+DEMO_START_TAG = "{{DEMO_ITEM_START}}"
+DEMO_END_TAG = "{{DEMO_ITEM_END}}"
+ITEM_TITLE_TAG = "{{ITEM_TITLE}}"
+
+_LAYOUT_RELTYPE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout"
+)
+_NOTES_RELTYPE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide"
+)
+_R_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+_A_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 
 
 def format_long_date(d: date) -> str:
@@ -172,6 +184,117 @@ def _write_agenda(text_frame, issues: Sequence[SprintIssue]) -> None:
             run_elem.insert(0, copy.deepcopy(rpr_xml))
 
 
+def _get_slide_notes_text(slide) -> str:
+    if not slide.has_notes_slide:
+        return ""
+    return slide.notes_slide.notes_text_frame.text
+
+
+def _find_item_range(prs) -> tuple[int, int] | None:
+    start_idx = end_idx = None
+    for i, slide in enumerate(prs.slides):
+        notes = _get_slide_notes_text(slide)
+        if DEMO_START_TAG in notes:
+            if start_idx is not None:
+                raise ValueError(
+                    f"Multiple {DEMO_START_TAG} tags found in template"
+                )
+            start_idx = i
+        if DEMO_END_TAG in notes:
+            if end_idx is not None:
+                raise ValueError(
+                    f"Multiple {DEMO_END_TAG} tags found in template"
+                )
+            end_idx = i
+    if start_idx is None and end_idx is None:
+        return None
+    if start_idx is None:
+        raise ValueError(
+            f"{DEMO_END_TAG} found without matching {DEMO_START_TAG}"
+        )
+    if end_idx is None:
+        raise ValueError(
+            f"{DEMO_START_TAG} found without matching {DEMO_END_TAG}"
+        )
+    if end_idx < start_idx:
+        raise ValueError(
+            f"{DEMO_END_TAG} appears before {DEMO_START_TAG}"
+        )
+    return start_idx, end_idx
+
+
+def _clone_slide(prs, slide):
+    new_slide = prs.slides.add_slide(slide.slide_layout)
+    rId_map = {}
+    for rel in slide.part.rels.values():
+        if rel.reltype in (_LAYOUT_RELTYPE, _NOTES_RELTYPE):
+            continue
+        if rel.is_external:
+            new_rId = new_slide.part.rels.get_or_add_ext_rel(
+                rel.reltype, rel.target_ref
+            )
+        else:
+            new_rId = new_slide.part.rels.get_or_add(
+                rel.reltype, rel.target_part
+            )
+        rId_map[rel.rId] = new_rId
+    new_xml = copy.deepcopy(slide._element)
+    for elem in new_xml.iter():
+        for attr_name in list(elem.attrib):
+            if _R_NS in attr_name:
+                old_val = elem.get(attr_name)
+                if old_val in rId_map:
+                    elem.set(attr_name, rId_map[old_val])
+    for child in list(new_slide._element):
+        new_slide._element.remove(child)
+    for child in list(new_xml):
+        new_slide._element.append(child)
+    if "shapes" in new_slide.__dict__:
+        del new_slide.__dict__["shapes"]
+    if slide.has_notes_slide:
+        src_body = slide.notes_slide.notes_text_frame._txBody
+        dst_body = new_slide.notes_slide.notes_text_frame._txBody
+        for child in list(dst_body):
+            if child.tag == _A_NS + "p":
+                dst_body.remove(child)
+        for child in src_body:
+            if child.tag == _A_NS + "p":
+                dst_body.append(copy.deepcopy(child))
+    return new_slide
+
+
+def _expand_demo_range(prs, demo_issues: Sequence[SprintIssue]) -> None:
+    result = _find_item_range(prs)
+    if result is None:
+        return
+    start_idx, end_idx = result
+    template_slides = [prs.slides[i] for i in range(start_idx, end_idx + 1)]
+    original_count = len(prs.slides)
+    for issue in demo_issues:
+        for tmpl in template_slides:
+            new_slide = _clone_slide(prs, tmpl)
+            for tf in _iter_shapes_text_frames(new_slide.shapes):
+                for para in tf.paragraphs:
+                    if ITEM_TITLE_TAG in para.text:
+                        _replace_in_paragraph(para, ITEM_TITLE_TAG, issue.title)
+            if new_slide.has_notes_slide:
+                for para in new_slide.notes_slide.notes_text_frame.paragraphs:
+                    if DEMO_START_TAG in para.text:
+                        _replace_in_paragraph(para, DEMO_START_TAG, "")
+                    if DEMO_END_TAG in para.text:
+                        _replace_in_paragraph(para, DEMO_END_TAG, "")
+    sldIdLst = prs.slides._sldIdLst
+    all_ids = list(sldIdLst)
+    before = all_ids[:start_idx]
+    after = all_ids[end_idx + 1:original_count]
+    clones = all_ids[original_count:]
+    new_order = before + clones + after
+    for child in list(sldIdLst):
+        sldIdLst.remove(child)
+    for sid in new_order:
+        sldIdLst.append(sid)
+
+
 def render_deck(
     template_path: Path,
     output_path: Path,
@@ -179,6 +302,8 @@ def render_deck(
     agenda_plan: AgendaPlan,
 ) -> None:
     prs = Presentation(str(template_path))
+
+    _expand_demo_range(prs, agenda_plan.demo)
 
     text_frames = list(_iter_text_frames(prs))
 
