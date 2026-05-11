@@ -11,6 +11,9 @@ sprint-recap.json
 *.pptx
 !tests/fixtures/*.pptx
 
+# Windows metadata
+*:Zone.Identifier
+
 # PyInstaller build artifacts
 dist/
 build/
