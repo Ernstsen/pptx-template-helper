@@ -9,7 +9,6 @@ same facade.
 
 from __future__ import annotations
 
-import curses
 import logging
 import sys
 from pathlib import Path
@@ -286,6 +285,8 @@ def _console_demo_selection(finished: Sequence["SprintIssue"]) -> set[str]:
     selected: set[int] = set()
     current = 0
     items = list(finished)
+
+    import curses
 
     def draw(stdscr: curses.window) -> set[str]:
         nonlocal current
