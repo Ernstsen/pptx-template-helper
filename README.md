@@ -14,8 +14,57 @@ contracts, and quickstart.
 - A YouTrack instance you can reach over the network.
 - A YouTrack API token with read access to the project's sprints and
   issues.
-- A pptx template containing the five tokens documented in
-  `specs/001-sprint-recap-deck/contracts/template-tokens.md`.
+- A pptx template containing the required tokens listed below.
+
+## Template tokens
+
+Place these tokens inside text frames on your template slides. The
+program finds them by exact string match and replaces them when
+generating the deck.
+
+### Date tokens (in-place replacement)
+
+These are replaced inside the paragraph they appear in — surrounding
+text is preserved. The substituted value uses long-form English dates
+with no leading zero on the day (e.g. `6 May 2026`).
+
+| Token | Replaced with | Required? |
+|---|---|---|
+| `{{SPRINT_START}}` | Sprint start date | Yes (may appear more than once) |
+| `{{SPRINT_END}}` | Sprint end date | Yes (may appear more than once) |
+| `{{RECAP_DATE}}` | Recap-meeting date (same as sprint end) | No |
+
+### Agenda tokens (full text-frame replacement)
+
+Each agenda token must be the **sole content** of its text frame (e.g.
+an empty bullet text box). The program clears the frame and writes one
+paragraph per issue title. The first paragraph inherits the formatting
+of the original first run so your bullet style carries over.
+
+Each agenda token must appear **exactly once**; duplicates cause an
+error.
+
+| Token | Replaced with | Required? |
+|---|---|---|
+| `{{AGENDA_DEMO}}` | Titles of resolved issues marked for demo | Yes |
+| `{{AGENDA_NO_DEMO}}` | Titles of resolved issues not marked for demo | Yes |
+| `{{AGENDA_OPEN}}` | Titles of unresolved issues | Yes |
+
+### Demo-item slide expansion (speaker notes)
+
+These tags go in **speaker notes**, not on the slide body. They mark a
+range of template slides that gets cloned once per demo issue.
+
+| Token | Placement | Purpose |
+|---|---|---|
+| `{{DEMO_ITEM_START}}` | Speaker notes of the first slide in the range | Marks the start of the per-demo-item template |
+| `{{DEMO_ITEM_END}}` | Speaker notes of the last slide in the range | Marks the end of the per-demo-item template |
+| `{{ITEM_TITLE}}` | Slide body, within the demo-item range | Replaced with the demo issue's title on each cloned slide |
+
+The start/end pair is optional — if absent, no slide expansion occurs.
+When present, each tag must appear exactly once and the start must
+precede the end. The tags are stripped from speaker notes on the
+generated slides.
 
 ## One-time setup
 
