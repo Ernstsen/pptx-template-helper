@@ -110,6 +110,44 @@ Rules:
 The filter is the only field of `sprint-recap.json` you should hand-edit
 between runs. All other fields are program-managed.
 
+## Building a standalone binary
+
+You can package the tool as a single executable so end-users don't need
+Python installed. The repo includes build scripts for both platforms.
+
+### Windows
+
+Double-click `build.bat` (or run it from cmd). It creates a temporary
+venv, installs dependencies plus PyInstaller, and produces
+`dist\sprint_recap.exe`. Copy the exe next to your pptx template.
+
+```cmd
+build.bat
+```
+
+### Linux
+
+Run `build.sh` from the repo root with the venv active:
+
+```bash
+source venv/bin/activate
+bash build.sh
+```
+
+The binary lands at `dist/sprint_recap`. Copy it next to your pptx
+template.
+
+### Notes
+
+- Python 3.11+ is required on the **build** machine only. The resulting
+  binary has no Python dependency.
+- PyInstaller is a build-time dependency and is not listed in
+  `requirements.txt`. The build scripts install it automatically.
+- The `--windowed` flag suppresses the console window on Windows
+  (double-click friendly). On Linux it is harmless.
+- `YOUTRACK_TOKEN` must still be set in the environment where the binary
+  runs — the exe reads it at startup just like the script.
+
 ## Tests
 
 ```bash
