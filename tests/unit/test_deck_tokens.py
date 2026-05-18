@@ -82,9 +82,21 @@ def test_render_deck_substitutes_date_tokens_in_place(tmp_path: Path) -> None:
     assert "{{SPRINT_START}}" not in joined
     assert "{{SPRINT_END}}" not in joined
     assert "{{RECAP_DATE}}" not in joined
+    assert "{{SPRINT_ID}}" not in joined
     assert "{{AGENDA_DEMO}}" not in joined
     assert "{{AGENDA_NO_DEMO}}" not in joined
     assert "{{AGENDA_OPEN}}" not in joined
+
+
+def test_render_deck_substitutes_sprint_id_token(tmp_path: Path) -> None:
+    template = tmp_path / "Recap-Template.pptx"
+    shutil.copy(FIXTURE, template)
+    output = tmp_path / "out.pptx"
+
+    render_deck(template, output, _sprint(), _agenda())
+
+    paragraphs = _all_paragraph_text(output)
+    assert "Sprint 42" in paragraphs
 
 
 def test_render_deck_writes_one_paragraph_per_issue_in_order(tmp_path: Path) -> None:

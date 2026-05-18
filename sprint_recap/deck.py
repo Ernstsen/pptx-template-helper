@@ -362,15 +362,16 @@ def render_deck(
                 "{{SPRINT_START}}" in text
                 or "{{SPRINT_END}}" in text
                 or "{{RECAP_DATE}}" in text
+                or "{{SPRINT_ID}}" in text
             ):
-                # Apply all three in one coalesce; order matters only
-                # because the helper rewrites the run on each call.
                 if "{{SPRINT_START}}" in para.text:
                     _replace_in_paragraph(para, "{{SPRINT_START}}", start_str)
                 if "{{SPRINT_END}}" in para.text:
                     _replace_in_paragraph(para, "{{SPRINT_END}}", end_str)
                 if "{{RECAP_DATE}}" in para.text:
                     _replace_in_paragraph(para, "{{RECAP_DATE}}", recap_str)
+                if "{{SPRINT_ID}}" in para.text:
+                    _replace_in_paragraph(para, "{{SPRINT_ID}}", sprint.name)
 
     # --- Agenda substitution (clear + write per issue). ---
     for tf in text_frames:

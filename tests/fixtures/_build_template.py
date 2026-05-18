@@ -14,6 +14,7 @@ The fixture deliberately includes:
     substitution is exercised with surrounding text (template-tokens
     contract §"Date tokens");
   - a subtitle text frame containing `{{RECAP_DATE}}`;
+  - a footer text frame containing `{{SPRINT_ID}}`;
   - a second slide with three text frames whose sole content is
     `{{AGENDA_DEMO}}`, `{{AGENDA_NO_DEMO}}`, and `{{AGENDA_OPEN}}`
     respectively, matching the agenda-token contract.
@@ -36,6 +37,11 @@ def build(out_path: Path) -> None:
     slide1.shapes.title.text = "Sprint {{SPRINT_START}} – {{SPRINT_END}}"
     # Subtitle placeholder index varies by template; layout 0 has it at idx 1.
     slide1.placeholders[1].text = "Recap meeting: {{RECAP_DATE}}"
+
+    footer = slide1.shapes.add_textbox(
+        Inches(0.3), Inches(6.5), Inches(4.0), Inches(0.5)
+    )
+    footer.text_frame.text = "{{SPRINT_ID}}"
 
     # Slide 2: blank layout with three text-box agenda regions.
     blank = prs.slide_layouts[6]

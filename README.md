@@ -33,6 +33,7 @@ with no leading zero on the day (e.g. `6 May 2026`).
 | `{{SPRINT_START}}` | Sprint start date | Yes (may appear more than once) |
 | `{{SPRINT_END}}` | Sprint end date | Yes (may appear more than once) |
 | `{{RECAP_DATE}}` | Recap-meeting date (same as sprint end) | No |
+| `{{SPRINT_ID}}` | Sprint name (e.g. "Sprint 14") | No |
 
 ### Agenda tokens (full text-frame replacement)
 
