@@ -68,6 +68,7 @@ def build_agenda_plan(
         demo=[],
         no_demo=finished,
         open=open_,
+        excluded=[],
         unfiltered_count=unfiltered_count,
         filtered_count=filtered_count,
         collapsed_subtask_count=collapsed_count,

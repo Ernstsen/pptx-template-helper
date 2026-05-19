@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal, Optional, Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sprint_recap.models import Sprint, SprintIssue
+    from sprint_recap.models import AgendaBucket, AgendaPlan, Sprint, SprintIssue
 
 _log = logging.getLogger(__name__)
 
@@ -281,79 +281,186 @@ def confirm_overwrite(path: Path) -> OverwriteChoice:
     return "save_as"
 
 
-def _console_demo_selection(finished: Sequence["SprintIssue"]) -> set[str]:
-    selected: set[int] = set()
+# ---------------------------------------------------------------------------
+# Spec 004 — unified bucket categorization
+# ---------------------------------------------------------------------------
+
+# Order in which Space cycles a row's bucket (spec 004 §Console / curses).
+_BUCKET_CYCLE: tuple[str, ...] = ("present", "mention", "open", "exclude")
+# Fixed-width bracketed labels (9 chars including the brackets) so rows align.
+_BUCKET_LABEL: dict[str, str] = {
+    "present": "[Present ]",
+    "mention": "[Mention ]",
+    "open":    "[Open    ]",
+    "exclude": "[Exclude ]",
+}
+
+
+def _default_bucket_for(issue: "SprintIssue") -> str:
+    """Default bucket on first entry: finished → mention, else → open."""
+    return "mention" if issue.is_finished else "open"
+
+
+def _gather_plan_issues(plan: "AgendaPlan") -> list["SprintIssue"]:
+    """Flatten the four bucket lists into a single ordered issue list.
+
+    Preserves the input plan's per-bucket order. Used to enumerate rows
+    in the categorization prompt.
+    """
+    return [*plan.demo, *plan.no_demo, *plan.open, *plan.excluded]
+
+
+def _initial_bucket(
+    issue: "SprintIssue", plan: "AgendaPlan"
+) -> str:
+    """Pick a bucket for `issue` given its membership in `plan`.
+
+    If the issue is already in one of the four bucket lists we honor that
+    placement (callers can re-show the prompt with a non-default plan).
+    Otherwise fall back to `_default_bucket_for`.
+    """
+    if any(i.id_readable == issue.id_readable for i in plan.demo):
+        return "present"
+    if any(i.id_readable == issue.id_readable for i in plan.no_demo):
+        return "mention"
+    if any(i.id_readable == issue.id_readable for i in plan.open):
+        return "open"
+    if any(i.id_readable == issue.id_readable for i in plan.excluded):
+        return "exclude"
+    return _default_bucket_for(issue)
+
+
+def _counts_line(buckets: Sequence[str]) -> str:
+    counts = {b: 0 for b in _BUCKET_CYCLE}
+    for b in buckets:
+        counts[b] += 1
+    return (
+        f"Present:{counts['present']}  "
+        f"Mention:{counts['mention']}  "
+        f"Open:{counts['open']}  "
+        f"Exclude:{counts['exclude']}"
+    )
+
+
+def _console_categorization(
+    plan: "AgendaPlan",
+) -> dict[str, "AgendaBucket"]:
+    items = _gather_plan_issues(plan)
+    buckets: list[str] = [_initial_bucket(i, plan) for i in items]
     current = 0
-    items = list(finished)
 
     import curses
 
-    def draw(stdscr: curses.window) -> set[str]:
+    def draw(stdscr) -> dict[str, "AgendaBucket"]:
         nonlocal current
         curses.curs_set(0)
         while True:
             stdscr.clear()
             height, width = stdscr.getmaxyx()
-            stdscr.addnstr(0, 0, "Select issues to demo (Space=toggle, Enter=confirm, q=cancel)", width - 1)
-            for idx, issue in enumerate(items):
-                if idx + 2 >= height:
+            stdscr.addnstr(
+                0,
+                0,
+                "Space=cycle bucket  ↑↓=navigate  Enter=confirm  q=cancel",
+                width - 1,
+            )
+            # Footer line drawn last so it always reflects the latest state.
+            visible_rows = max(0, height - 3)
+            # Keep the highlighted row in view by computing a simple window.
+            if visible_rows <= 0:
+                start_row = 0
+            elif current < visible_rows:
+                start_row = 0
+            else:
+                start_row = current - visible_rows + 1
+            for offset in range(visible_rows):
+                idx = start_row + offset
+                if idx >= len(items):
                     break
-                marker = "[x]" if idx in selected else "[ ]"
-                line = f"{marker} {issue.id_readable}  {issue.title}"
+                issue = items[idx]
+                label = _BUCKET_LABEL[buckets[idx]]
+                line = f"{label}  {issue.id_readable}  {issue.title}"
                 attr = curses.A_REVERSE if idx == current else 0
-                stdscr.addnstr(idx + 2, 0, line, width - 1, attr)
+                stdscr.addnstr(offset + 2, 0, line, width - 1, attr)
+            footer = _counts_line(buckets)
+            stdscr.addnstr(height - 1, 0, footer, width - 1)
             stdscr.refresh()
             key = stdscr.getch()
             if key == ord("q"):
-                raise ValueError("User cancelled demo selection.")
+                raise ValueError("User cancelled categorization.")
             if key in (curses.KEY_UP, ord("k")):
                 current = max(0, current - 1)
             elif key in (curses.KEY_DOWN, ord("j")):
                 current = min(len(items) - 1, current + 1)
             elif key == ord(" "):
-                if current in selected:
-                    selected.discard(current)
-                else:
-                    selected.add(current)
+                cur_bucket = buckets[current]
+                nxt = _BUCKET_CYCLE[
+                    (_BUCKET_CYCLE.index(cur_bucket) + 1) % len(_BUCKET_CYCLE)
+                ]
+                buckets[current] = nxt
             elif key in (curses.KEY_ENTER, 10, 13):
-                return {items[i].id_readable for i in selected}
+                return {
+                    items[i].id_readable: buckets[i]  # type: ignore[misc]
+                    for i in range(len(items))
+                }
 
     return curses.wrapper(draw)
 
 
-def _tkinter_demo_selection(finished: Sequence["SprintIssue"]) -> set[str]:
+def _tkinter_categorization(
+    plan: "AgendaPlan",
+) -> dict[str, "AgendaBucket"]:
+    items = _gather_plan_issues(plan)
+    initial = [_initial_bucket(i, plan) for i in items]
+
     import tkinter as tk
 
     root = tk.Tk()
     root.withdraw()
     top = tk.Toplevel(root)
-    top.title("sprint-recap — demo selection")
+    top.title("sprint-recap — categorize agenda")
 
-    tk.Label(top, text="Select resolved issues to demo:").pack(padx=8, pady=8)
+    counts_var = tk.StringVar(value=_counts_line(initial))
+    tk.Label(top, textvariable=counts_var).pack(padx=8, pady=8)
 
     container = tk.Frame(top)
     container.pack(padx=8, pady=4, fill=tk.BOTH, expand=True)
     canvas = tk.Canvas(container)
     scrollbar = tk.Scrollbar(container, orient=tk.VERTICAL, command=canvas.yview)
     inner = tk.Frame(canvas)
-    inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    inner.bind(
+        "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    )
     canvas.create_window((0, 0), window=inner, anchor="nw")
     canvas.configure(yscrollcommand=scrollbar.set)
     canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-    vars_: list[tuple[str, tk.BooleanVar]] = []
-    for issue in finished:
-        var = tk.BooleanVar(value=False)
-        tk.Checkbutton(inner, text=f"{issue.id_readable}  {issue.title}", variable=var, anchor="w").pack(
-            fill=tk.X, padx=4, pady=1
-        )
-        vars_.append((issue.id_readable, var))
+    row_vars: list[tuple[str, "tk.StringVar"]] = []
 
-    result: dict[str, set[str] | None] = {"value": None}
+    def _refresh_counts() -> None:
+        counts_var.set(_counts_line([var.get() for _, var in row_vars]))
+
+    for issue, init_bucket in zip(items, initial):
+        row = tk.Frame(inner)
+        row.pack(fill=tk.X, padx=4, pady=1)
+        var = tk.StringVar(value=init_bucket)
+        for bucket in _BUCKET_CYCLE:
+            tk.Radiobutton(
+                row,
+                text=bucket.capitalize(),
+                value=bucket,
+                variable=var,
+                command=_refresh_counts,
+            ).pack(side=tk.LEFT, padx=2)
+        tk.Label(row, text=f"{issue.id_readable}  {issue.title}", anchor="w").pack(
+            side=tk.LEFT, padx=8
+        )
+        row_vars.append((issue.id_readable, var))
+
+    result: dict[str, dict[str, "AgendaBucket"] | None] = {"value": None}
 
     def confirm() -> None:
-        result["value"] = {id_ for id_, var in vars_ if var.get()}
+        result["value"] = {id_: var.get() for id_, var in row_vars}  # type: ignore[misc]
         top.destroy()
 
     def cancel() -> None:
@@ -370,14 +477,20 @@ def _tkinter_demo_selection(finished: Sequence["SprintIssue"]) -> set[str]:
     root.destroy()
 
     if result["value"] is None:
-        raise ValueError("User cancelled demo selection.")
+        raise ValueError("User cancelled categorization.")
     return result["value"]
 
 
-def prompt_demo_selection(finished: Sequence["SprintIssue"]) -> set[str]:
-    if not finished:
-        return set()
+def prompt_categorization(plan: "AgendaPlan") -> dict[str, "AgendaBucket"]:
+    """Show the unified four-bucket categorization screen (spec 004).
+
+    Returns a mapping `id_readable → bucket` for every issue across the
+    four bucket lists combined. Skips the UI and returns `{}` if all four
+    buckets are empty. Raises `ValueError` on cancel.
+    """
+    if not (plan.demo or plan.no_demo or plan.open or plan.excluded):
+        return {}
     mode = detect_prompt_mode()
     if mode == "console":
-        return _console_demo_selection(finished)
-    return _tkinter_demo_selection(finished)
+        return _console_categorization(plan)
+    return _tkinter_categorization(plan)

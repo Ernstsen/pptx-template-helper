@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from sprint_recap import classify, config, deck, logging_setup, naming, prompts
-from sprint_recap.models import AgendaPlan, SavedSettings, Sprint
+from sprint_recap.models import AgendaBucket, AgendaPlan, SavedSettings, Sprint
 from sprint_recap.youtrack import Board, Project, YouTrackClient, YouTrackError
 
 
@@ -186,11 +186,101 @@ def _write_cross_reference(
 ) -> None:
     log.info("agenda:")
     for issue in plan.demo:
-        log.info("  %s | demo    | %s", issue.id_readable, issue.title)
+        log.info("  %s | demo     | %s", issue.id_readable, issue.title)
     for issue in plan.no_demo:
-        log.info("  %s | no-demo | %s", issue.id_readable, issue.title)
+        log.info("  %s | no-demo  | %s", issue.id_readable, issue.title)
     for issue in plan.open:
-        log.info("  %s | open    | %s", issue.id_readable, issue.title)
+        log.info("  %s | open     | %s", issue.id_readable, issue.title)
+    for issue in plan.excluded:
+        log.info("  %s | excluded | %s", issue.id_readable, issue.title)
+
+
+def _apply_categorization(
+    plan: AgendaPlan, mapping: dict[str, AgendaBucket]
+) -> AgendaPlan:
+    """Rebuild the four bucket lists from a `id_readable → bucket` mapping.
+
+    Order within each output bucket:
+      * Finished issues (resolved_at is not None) come first, retaining
+        their input `(resolved_at, id_readable)` order.
+      * Unresolved issues come next, retaining their input
+        `(created_at, id_readable)` order.
+    The input plan's per-bucket order is taken as already-sorted; this
+    helper only re-bucketises and re-merges, preserving relative order.
+
+    Validates the spec 004 invariant
+        len(demo) + len(no_demo) + len(open) + len(excluded)
+        == filtered_count - collapsed_subtask_count
+    and raises `ValueError` on any inconsistency. The prompt is the only
+    producer of `mapping`, so a violation is a programmer error.
+    """
+    # Preserve the input plan's order: finished issues first (resolved_at
+    # ascending), then unresolved (created_at ascending). The input plan
+    # already has each bucket in its natural sort, so we can just take
+    # the four lists in order and assume each "side" stays internally
+    # ordered.
+    all_issues = [*plan.demo, *plan.no_demo, *plan.open, *plan.excluded]
+
+    by_id = {i.id_readable: i for i in all_issues}
+    if set(mapping.keys()) != set(by_id.keys()):
+        missing = set(by_id.keys()) - set(mapping.keys())
+        extra = set(mapping.keys()) - set(by_id.keys())
+        raise ValueError(
+            f"categorization mapping mismatch: missing={sorted(missing)} "
+            f"extra={sorted(extra)}"
+        )
+
+    finished = [i for i in all_issues if i.is_finished]
+    unresolved = [i for i in all_issues if not i.is_finished]
+    finished.sort(key=lambda i: (i.resolved_at, i.id_readable))
+    unresolved.sort(key=lambda i: (i.created_at, i.id_readable))
+
+    buckets: dict[str, list] = {
+        "present": [],
+        "mention": [],
+        "open": [],
+        "exclude": [],
+    }
+    for issue in finished:
+        b = mapping[issue.id_readable]
+        if b not in buckets:
+            raise ValueError(
+                f"invalid bucket {b!r} for {issue.id_readable!r}"
+            )
+        buckets[b].append(issue)
+    for issue in unresolved:
+        b = mapping[issue.id_readable]
+        if b not in buckets:
+            raise ValueError(
+                f"invalid bucket {b!r} for {issue.id_readable!r}"
+            )
+        buckets[b].append(issue)
+
+    new_plan = AgendaPlan(
+        demo=buckets["present"],
+        no_demo=buckets["mention"],
+        open=buckets["open"],
+        excluded=buckets["exclude"],
+        unfiltered_count=plan.unfiltered_count,
+        filtered_count=plan.filtered_count,
+        collapsed_subtask_count=plan.collapsed_subtask_count,
+    )
+
+    total = (
+        len(new_plan.demo)
+        + len(new_plan.no_demo)
+        + len(new_plan.open)
+        + len(new_plan.excluded)
+    )
+    expected = new_plan.filtered_count - new_plan.collapsed_subtask_count
+    if total != expected:
+        raise ValueError(
+            f"categorization invariant violated: "
+            f"buckets sum to {total}, expected {expected} "
+            f"(filtered={new_plan.filtered_count}, "
+            f"collapsed={new_plan.collapsed_subtask_count})"
+        )
+    return new_plan
 
 
 def _pick_sprint_interactively(
@@ -300,16 +390,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         logger.info("filtered_count = %d", plan.filtered_count)
         logger.info("collapsed_subtasks = %d", plan.collapsed_subtask_count)
 
-        if plan.no_demo:
-            demo_ids = prompts.prompt_demo_selection(plan.no_demo)
-            plan.demo = [i for i in plan.no_demo if i.id_readable in demo_ids]
-            plan.no_demo = [i for i in plan.no_demo if i.id_readable not in demo_ids]
+        mapping = prompts.prompt_categorization(plan)
+        if mapping:
+            plan = _apply_categorization(plan, mapping)
 
         logger.info(
-            "demo_count = %d   no_demo_count = %d   open_count = %d",
+            "demo_count = %d   no_demo_count = %d   open_count = %d   excluded_count = %d",
             len(plan.demo),
             len(plan.no_demo),
             len(plan.open),
+            len(plan.excluded),
         )
 
         output_path, log_path = naming.output_paths(

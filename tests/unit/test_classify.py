@@ -106,9 +106,24 @@ def test_empty_sprint_yields_empty_plans_with_correct_counts() -> None:
     assert plan.demo == []
     assert plan.no_demo == []
     assert plan.open == []
+    assert plan.excluded == []
     assert plan.unfiltered_count == 0
     assert plan.filtered_count == 0
     assert plan.collapsed_subtask_count == 0
+
+
+def test_initial_categorization_defaults_match_spec_004() -> None:
+    """Spec 004: build_agenda_plan returns demo=[], no_demo=finished,
+    open=unresolved, excluded=[]."""
+    issues = [
+        _issue("PROJ-1", resolved=_utc(2026, 4, 10)),
+        _issue("PROJ-2", resolved=None),
+    ]
+    plan = build_agenda_plan(issues, type_filter="all")
+    assert plan.demo == []
+    assert [i.id_readable for i in plan.no_demo] == ["PROJ-1"]
+    assert [i.id_readable for i in plan.open] == ["PROJ-2"]
+    assert plan.excluded == []
 
 
 def test_filter_default_all_is_noop() -> None:
@@ -139,13 +154,14 @@ def test_empty_list_filter_treated_as_all() -> None:
     assert [i.id_readable for i in plan.open] == ["PROJ-1"]
 
 
-def test_invariant_demo_no_demo_open_equals_filtered_minus_collapsed() -> None:
+def test_invariant_demo_no_demo_open_excluded_equals_filtered_minus_collapsed() -> None:
     parent = _issue("PROJ-100", resolved=_utc(2026, 4, 10))
     sub = _issue("PROJ-101", parent="PROJ-100", resolved=None)
     other = _issue("PROJ-200", resolved=None)
     plan = build_agenda_plan([parent, sub, other], type_filter="all")
     assert plan.demo == []
+    assert plan.excluded == []
     assert (
-        len(plan.demo) + len(plan.no_demo) + len(plan.open)
+        len(plan.demo) + len(plan.no_demo) + len(plan.open) + len(plan.excluded)
         == plan.filtered_count - plan.collapsed_subtask_count
     )

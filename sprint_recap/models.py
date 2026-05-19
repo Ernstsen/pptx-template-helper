@@ -51,6 +51,14 @@ class SprintIssue:
 IssueTypeFilter = Union[Literal["all"], list[str]]
 
 
+# Four-bucket categorization (spec 004). Each issue surviving the type filter
+# and subtask collapse is assigned exactly one bucket via the categorization
+# prompt. The internal AgendaPlan field names (demo/no_demo/open) stay as they
+# are to avoid churning the renderer and existing tests; only the user-facing
+# labels in the prompt and log use the bucket names.
+AgendaBucket = Literal["present", "mention", "open", "exclude"]
+
+
 @dataclass
 class SavedSettings:
     youtrack_url: str
@@ -68,6 +76,7 @@ class AgendaPlan:
     demo: list[SprintIssue] = field(default_factory=list)
     no_demo: list[SprintIssue] = field(default_factory=list)
     open: list[SprintIssue] = field(default_factory=list)
+    excluded: list[SprintIssue] = field(default_factory=list)
     unfiltered_count: int = 0
     filtered_count: int = 0
     collapsed_subtask_count: int = 0
