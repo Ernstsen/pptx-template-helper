@@ -72,11 +72,41 @@ class SavedSettings:
 
 
 @dataclass
+class AgendaRow:
+    """Spec 005 per-bucket display wrapper.
+
+    Pairs a `SprintIssue` with a mutable `display_title` so the user can
+    rename the bullet shown on the deck (and recorded in the per-run log)
+    without mutating the read-only issue payload from YouTrack. The
+    rename is local to one run; nothing is persisted.
+
+    `id_readable` and `is_finished` are proxied through to the wrapped
+    issue so callers that previously took raw `SprintIssue` lists keep
+    working with minimal changes.
+    """
+
+    issue: SprintIssue
+    display_title: str  # initialized to issue.title
+
+    @classmethod
+    def from_issue(cls, issue: SprintIssue) -> "AgendaRow":
+        return cls(issue=issue, display_title=issue.title)
+
+    @property
+    def id_readable(self) -> str:
+        return self.issue.id_readable
+
+    @property
+    def is_finished(self) -> bool:
+        return self.issue.is_finished
+
+
+@dataclass
 class AgendaPlan:
-    demo: list[SprintIssue] = field(default_factory=list)
-    no_demo: list[SprintIssue] = field(default_factory=list)
-    open: list[SprintIssue] = field(default_factory=list)
-    excluded: list[SprintIssue] = field(default_factory=list)
+    demo: list[AgendaRow] = field(default_factory=list)
+    no_demo: list[AgendaRow] = field(default_factory=list)
+    open: list[AgendaRow] = field(default_factory=list)
+    excluded: list[AgendaRow] = field(default_factory=list)
     unfiltered_count: int = 0
     filtered_count: int = 0
     collapsed_subtask_count: int = 0

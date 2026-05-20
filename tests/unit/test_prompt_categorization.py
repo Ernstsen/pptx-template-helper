@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from sprint_recap import prompts
-from sprint_recap.models import AgendaPlan, SprintIssue
+from sprint_recap.models import AgendaPlan, AgendaRow, SprintIssue
 
 
 @pytest.fixture(autouse=True)
@@ -28,25 +28,29 @@ def _reset_mode() -> None:
     prompts.reset_prompt_mode()
 
 
-def _finished_issue(id_readable: str, title: str = "x") -> SprintIssue:
-    return SprintIssue(
-        id_readable=id_readable,
-        title=title,
-        issue_type="Story",
-        parent_id_readable=None,
-        resolved_at=datetime(2026, 4, 30, tzinfo=timezone.utc),
-        created_at=datetime(2026, 4, 9, tzinfo=timezone.utc),
+def _finished_issue(id_readable: str, title: str = "x") -> AgendaRow:
+    return AgendaRow.from_issue(
+        SprintIssue(
+            id_readable=id_readable,
+            title=title,
+            issue_type="Story",
+            parent_id_readable=None,
+            resolved_at=datetime(2026, 4, 30, tzinfo=timezone.utc),
+            created_at=datetime(2026, 4, 9, tzinfo=timezone.utc),
+        )
     )
 
 
-def _open_issue(id_readable: str, title: str = "x") -> SprintIssue:
-    return SprintIssue(
-        id_readable=id_readable,
-        title=title,
-        issue_type="Story",
-        parent_id_readable=None,
-        resolved_at=None,
-        created_at=datetime(2026, 4, 9, tzinfo=timezone.utc),
+def _open_issue(id_readable: str, title: str = "x") -> AgendaRow:
+    return AgendaRow.from_issue(
+        SprintIssue(
+            id_readable=id_readable,
+            title=title,
+            issue_type="Story",
+            parent_id_readable=None,
+            resolved_at=None,
+            created_at=datetime(2026, 4, 9, tzinfo=timezone.utc),
+        )
     )
 
 

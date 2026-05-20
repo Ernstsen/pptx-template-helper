@@ -15,8 +15,10 @@ from datetime import datetime, timezone
 
 import pytest
 
-from sprint_recap.app import _apply_categorization
-from sprint_recap.models import AgendaPlan, SprintIssue
+import logging
+
+from sprint_recap.app import _apply_categorization, _write_cross_reference
+from sprint_recap.models import AgendaPlan, AgendaRow, SprintIssue
 
 
 def _utc(year: int, month: int, day: int, hour: int = 0) -> datetime:
@@ -44,8 +46,8 @@ def _default_plan(
 ) -> AgendaPlan:
     return AgendaPlan(
         demo=[],
-        no_demo=finished,
-        open=open_,
+        no_demo=[AgendaRow.from_issue(i) for i in finished],
+        open=[AgendaRow.from_issue(i) for i in open_],
         excluded=[],
         unfiltered_count=len(finished) + len(open_),
         filtered_count=len(finished) + len(open_),
@@ -175,14 +177,62 @@ def test_excluded_bucket_collects_hidden_issues() -> None:
     assert [i.id_readable for i in out.excluded] == ["PROJ-A", "PROJ-B"]
 
 
+# ---------------------------------------------------------------------------
+# Spec 005 — AgendaRow identity across re-categorization and log surface
+# ---------------------------------------------------------------------------
+
+
+def test_apply_categorization_reuses_same_agenda_row_across_buckets() -> None:
+    """Spec 005: when a row moves bucket, the SAME AgendaRow instance is
+    reused so any prior rename (display_title edit) survives."""
+    issue = _issue("PROJ-A", resolved=_utc(2026, 4, 10))
+    row = AgendaRow.from_issue(issue)
+    row.display_title = "Renamed by user"  # simulate a prior rename
+    plan = AgendaPlan(
+        demo=[],
+        no_demo=[row],
+        open=[],
+        excluded=[],
+        unfiltered_count=1,
+        filtered_count=1,
+        collapsed_subtask_count=0,
+    )
+
+    out = _apply_categorization(plan, {"PROJ-A": "present"})
+
+    assert out.no_demo == []
+    assert len(out.demo) == 1
+    assert out.demo[0] is row, "row must be the same instance, not a copy"
+    assert out.demo[0].display_title == "Renamed by user"
+
+
+def test_write_cross_reference_uses_display_title(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Spec 005: the cross-reference log line reads `display_title`, not
+    the underlying issue title."""
+    logger = logging.getLogger("test_xref")
+    issue = _issue("PROJ-A", resolved=_utc(2026, 4, 10))
+    row = AgendaRow.from_issue(issue)
+    row.display_title = "Edited title"
+    plan = AgendaPlan(no_demo=[row])
+
+    with caplog.at_level(logging.INFO, logger="test_xref"):
+        _write_cross_reference(logger, plan)
+
+    log_text = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "Edited title" in log_text
+    assert "PROJ-A" in log_text
+
+
 def test_invariant_still_holds_with_collapsed_subtasks_in_counts() -> None:
     """`filtered_count - collapsed_subtask_count` must equal the sum of
     the four bucket lengths."""
     f = _issue("PROJ-A", resolved=_utc(2026, 4, 10))
     o = _issue("PROJ-B")
     plan = AgendaPlan(
-        no_demo=[f],
-        open=[o],
+        no_demo=[AgendaRow.from_issue(f)],
+        open=[AgendaRow.from_issue(o)],
         unfiltered_count=5,
         filtered_count=3,  # one issue filtered out
         collapsed_subtask_count=1,  # one subtask collapsed

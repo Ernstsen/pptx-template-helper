@@ -13,7 +13,7 @@ from pptx import Presentation
 from pptx.util import Inches
 
 from sprint_recap.deck import render_deck
-from sprint_recap.models import AgendaPlan, Sprint, SprintIssue
+from sprint_recap.models import AgendaPlan, AgendaRow, Sprint, SprintIssue
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "template.pptx"
 
@@ -44,10 +44,17 @@ def _agenda(
     no_demo: list[SprintIssue] | None = None,
     open_: list[SprintIssue] | None = None,
 ) -> AgendaPlan:
+    def _wrap(issues: list[SprintIssue]) -> list[AgendaRow]:
+        return [AgendaRow.from_issue(i) for i in issues]
+
     return AgendaPlan(
-        demo=demo if demo is not None else [],
-        no_demo=no_demo if no_demo is not None else [_issue("P-10", "No-demo item")],
-        open=open_ if open_ is not None else [_issue("P-11", "Open item", resolved=False)],
+        demo=_wrap(demo) if demo is not None else [],
+        no_demo=_wrap(no_demo) if no_demo is not None else _wrap(
+            [_issue("P-10", "No-demo item")]
+        ),
+        open=_wrap(open_) if open_ is not None else _wrap(
+            [_issue("P-11", "Open item", resolved=False)]
+        ),
         unfiltered_count=0,
         filtered_count=0,
     )
@@ -313,6 +320,40 @@ def test_notes_text_preserved_around_tags(tmp_path: Path) -> None:
     assert "end" in notes
     assert "{{DEMO_ITEM_START}}" not in notes
     assert "{{DEMO_ITEM_END}}" not in notes
+
+
+def test_item_title_substituted_with_display_title_not_issue_title(
+    tmp_path: Path,
+) -> None:
+    """Spec 005: `_expand_demo_range` substitutes `{{ITEM_TITLE}}` with
+    `row.display_title`, not the underlying issue title."""
+    template = tmp_path / "tmpl.pptx"
+    _build_demo_template(template, range_size=1)
+    output = tmp_path / "out.pptx"
+
+    demo_row = AgendaRow.from_issue(_issue("P-1", "Original demo title"))
+    demo_row.display_title = "Edited demo title"
+    agenda = AgendaPlan(
+        demo=[demo_row],
+        no_demo=[AgendaRow.from_issue(_issue("P-10", "No-demo item"))],
+        open=[
+            AgendaRow.from_issue(_issue("P-11", "Open item", resolved=False))
+        ],
+        unfiltered_count=0,
+        filtered_count=0,
+    )
+
+    render_deck(template, output, _sprint(), agenda)
+    prs = Presentation(str(output))
+    demo_slide = prs.slides[2]
+    texts = [
+        p.text
+        for s in demo_slide.shapes
+        if s.has_text_frame
+        for p in s.text_frame.paragraphs
+    ]
+    assert "Demo: Edited demo title" in texts
+    assert "Demo: Original demo title" not in texts
 
 
 def test_clone_preserves_images(tmp_path: Path) -> None:

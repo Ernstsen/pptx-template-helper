@@ -11,7 +11,7 @@ import pytest
 from pptx import Presentation
 
 from sprint_recap.deck import render_deck
-from sprint_recap.models import AgendaPlan, Sprint, SprintIssue
+from sprint_recap.models import AgendaPlan, AgendaRow, Sprint, SprintIssue
 
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "template.pptx"
@@ -41,13 +41,23 @@ def _issue(id_: str, title: str, resolved: bool) -> SprintIssue:
 def _agenda() -> AgendaPlan:
     return AgendaPlan(
         demo=[
-            _issue("PROJ-1", "Migrate billing service to v3", resolved=True),
+            AgendaRow.from_issue(
+                _issue("PROJ-1", "Migrate billing service to v3", resolved=True)
+            ),
         ],
         no_demo=[
-            _issue("PROJ-2", "Hot-patch invoice rounding", resolved=True),
+            AgendaRow.from_issue(
+                _issue("PROJ-2", "Hot-patch invoice rounding", resolved=True)
+            ),
         ],
         open=[
-            _issue("PROJ-3", "Investigate p99 latency on report API", resolved=False),
+            AgendaRow.from_issue(
+                _issue(
+                    "PROJ-3",
+                    "Investigate p99 latency on report API",
+                    resolved=False,
+                )
+            ),
         ],
         unfiltered_count=3,
         filtered_count=3,
@@ -151,6 +161,27 @@ def test_render_deck_raises_when_required_token_missing(tmp_path: Path) -> None:
     with pytest.raises(Exception) as exc:
         render_deck(template, output, _sprint(), _agenda())
     assert "{{AGENDA_DEMO}}" in str(exc.value)
+
+
+def test_render_deck_writes_display_title_not_issue_title(tmp_path: Path) -> None:
+    """Spec 005: the renderer reads `display_title`, so an edited row
+    shows the user's text instead of the original YouTrack title."""
+    template = tmp_path / "Recap-Template.pptx"
+    shutil.copy(FIXTURE, template)
+    output = tmp_path / "out.pptx"
+
+    plan = _agenda()
+    plan.no_demo[0].display_title = "Edited mention title"
+    plan.open[0].display_title = "Edited open title"
+
+    render_deck(template, output, _sprint(), plan)
+    paragraphs = _all_paragraph_text(output)
+    assert "Edited mention title" in paragraphs
+    assert "Edited open title" in paragraphs
+    # Original (un-edited) titles must not have been written for the
+    # rows we renamed.
+    assert "Hot-patch invoice rounding" not in paragraphs
+    assert "Investigate p99 latency on report API" not in paragraphs
 
 
 def test_render_deck_raises_on_duplicate_agenda_token(tmp_path: Path) -> None:

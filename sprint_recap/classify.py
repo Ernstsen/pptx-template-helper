@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Iterable, Sequence
 
-from sprint_recap.models import AgendaPlan, IssueTypeFilter, SprintIssue
+from sprint_recap.models import AgendaPlan, AgendaRow, IssueTypeFilter, SprintIssue
 
 _log = logging.getLogger(__name__)
 
@@ -55,19 +55,21 @@ def build_agenda_plan(
             continue
         collapsed.append(issue)
 
-    finished = sorted(
+    finished_issues = sorted(
         (i for i in collapsed if i.is_finished),
         key=lambda i: (i.resolved_at, i.id_readable),
     )
-    open_ = sorted(
+    open_issues = sorted(
         (i for i in collapsed if not i.is_finished),
         key=lambda i: (i.created_at, i.id_readable),
     )
 
+    # Spec 005: wrap each issue in an AgendaRow so downstream callers can
+    # carry a per-row editable `display_title` through the pipeline.
     return AgendaPlan(
         demo=[],
-        no_demo=finished,
-        open=open_,
+        no_demo=[AgendaRow.from_issue(i) for i in finished_issues],
+        open=[AgendaRow.from_issue(i) for i in open_issues],
         excluded=[],
         unfiltered_count=unfiltered_count,
         filtered_count=filtered_count,

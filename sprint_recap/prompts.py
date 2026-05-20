@@ -15,7 +15,13 @@ from pathlib import Path
 from typing import Literal, Optional, Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sprint_recap.models import AgendaBucket, AgendaPlan, Sprint, SprintIssue
+    from sprint_recap.models import (
+        AgendaBucket,
+        AgendaPlan,
+        AgendaRow,
+        Sprint,
+        SprintIssue,
+    )
 
 _log = logging.getLogger(__name__)
 
@@ -296,13 +302,13 @@ _BUCKET_LABEL: dict[str, str] = {
 }
 
 
-def _default_bucket_for(issue: "SprintIssue") -> str:
+def _default_bucket_for(row: "AgendaRow") -> str:
     """Default bucket on first entry: finished → mention, else → open."""
-    return "mention" if issue.is_finished else "open"
+    return "mention" if row.is_finished else "open"
 
 
-def _gather_plan_issues(plan: "AgendaPlan") -> list["SprintIssue"]:
-    """Flatten the four bucket lists into a single ordered issue list.
+def _gather_plan_issues(plan: "AgendaPlan") -> list["AgendaRow"]:
+    """Flatten the four bucket lists into a single ordered row list.
 
     Preserves the input plan's per-bucket order. Used to enumerate rows
     in the categorization prompt.
@@ -311,23 +317,23 @@ def _gather_plan_issues(plan: "AgendaPlan") -> list["SprintIssue"]:
 
 
 def _initial_bucket(
-    issue: "SprintIssue", plan: "AgendaPlan"
+    row: "AgendaRow", plan: "AgendaPlan"
 ) -> str:
-    """Pick a bucket for `issue` given its membership in `plan`.
+    """Pick a bucket for `row` given its membership in `plan`.
 
-    If the issue is already in one of the four bucket lists we honor that
+    If the row is already in one of the four bucket lists we honor that
     placement (callers can re-show the prompt with a non-default plan).
     Otherwise fall back to `_default_bucket_for`.
     """
-    if any(i.id_readable == issue.id_readable for i in plan.demo):
+    if any(r.id_readable == row.id_readable for r in plan.demo):
         return "present"
-    if any(i.id_readable == issue.id_readable for i in plan.no_demo):
+    if any(r.id_readable == row.id_readable for r in plan.no_demo):
         return "mention"
-    if any(i.id_readable == issue.id_readable for i in plan.open):
+    if any(r.id_readable == row.id_readable for r in plan.open):
         return "open"
-    if any(i.id_readable == issue.id_readable for i in plan.excluded):
+    if any(r.id_readable == row.id_readable for r in plan.excluded):
         return "exclude"
-    return _default_bucket_for(issue)
+    return _default_bucket_for(row)
 
 
 def _counts_line(buckets: Sequence[str]) -> str:
@@ -376,9 +382,9 @@ def _console_categorization(
                 idx = start_row + offset
                 if idx >= len(items):
                     break
-                issue = items[idx]
+                row = items[idx]
                 label = _BUCKET_LABEL[buckets[idx]]
-                line = f"{label}  {issue.id_readable}  {issue.title}"
+                line = f"{label}  {row.id_readable}  {row.display_title}"
                 attr = curses.A_REVERSE if idx == current else 0
                 stdscr.addnstr(offset + 2, 0, line, width - 1, attr)
             footer = _counts_line(buckets)
@@ -440,22 +446,24 @@ def _tkinter_categorization(
     def _refresh_counts() -> None:
         counts_var.set(_counts_line([var.get() for _, var in row_vars]))
 
-    for issue, init_bucket in zip(items, initial):
-        row = tk.Frame(inner)
-        row.pack(fill=tk.X, padx=4, pady=1)
+    for plan_row, init_bucket in zip(items, initial):
+        row_frame = tk.Frame(inner)
+        row_frame.pack(fill=tk.X, padx=4, pady=1)
         var = tk.StringVar(value=init_bucket)
         for bucket in _BUCKET_CYCLE:
             tk.Radiobutton(
-                row,
+                row_frame,
                 text=bucket.capitalize(),
                 value=bucket,
                 variable=var,
                 command=_refresh_counts,
             ).pack(side=tk.LEFT, padx=2)
-        tk.Label(row, text=f"{issue.id_readable}  {issue.title}", anchor="w").pack(
-            side=tk.LEFT, padx=8
-        )
-        row_vars.append((issue.id_readable, var))
+        tk.Label(
+            row_frame,
+            text=f"{plan_row.id_readable}  {plan_row.display_title}",
+            anchor="w",
+        ).pack(side=tk.LEFT, padx=8)
+        row_vars.append((plan_row.id_readable, var))
 
     result: dict[str, dict[str, "AgendaBucket"] | None] = {"value": None}
 
@@ -494,3 +502,386 @@ def prompt_categorization(plan: "AgendaPlan") -> dict[str, "AgendaBucket"]:
     if mode == "console":
         return _console_categorization(plan)
     return _tkinter_categorization(plan)
+
+
+# ---------------------------------------------------------------------------
+# Spec 005 — Reorder + rename screen
+# ---------------------------------------------------------------------------
+
+# Editable buckets in display order on the reorder/rename screen.
+# Excluded rows are not shown (spec 005 §Decisions).
+_REORDER_BUCKETS: tuple[tuple[str, str], ...] = (
+    ("demo", "Present"),
+    ("no_demo", "Mention"),
+    ("open", "Open"),
+)
+
+
+def _reorder_is_empty(plan: "AgendaPlan") -> bool:
+    return not (plan.demo or plan.no_demo or plan.open)
+
+
+def _console_reorder_rename(plan: "AgendaPlan") -> None:
+    """Curses screen: three labeled sections, Alt+↑/↓ moves within
+    section, `e` renames, Enter confirms, q cancels. Mutates `plan` in
+    place. See spec 005 §Console / curses for the contract.
+    """
+    import curses
+
+    # Sequence of bucket attr names so we can address the three editable
+    # lists generically. Excluded is intentionally absent.
+    bucket_attrs = [attr for attr, _ in _REORDER_BUCKETS]
+    bucket_labels = {attr: label for attr, label in _REORDER_BUCKETS}
+
+    def _bucket_list(attr: str) -> list:
+        return getattr(plan, attr)
+
+    def _flat_positions() -> list[tuple[str, int]]:
+        """Return [(bucket_attr, row_index_in_bucket)] for every visible
+        row, in display order. Used by ↑/↓ navigation."""
+        positions: list[tuple[str, int]] = []
+        for attr in bucket_attrs:
+            for idx in range(len(_bucket_list(attr))):
+                positions.append((attr, idx))
+        return positions
+
+    def draw(stdscr) -> None:
+        curses.curs_set(0)
+        # Highlighted position: index into _flat_positions().
+        cur_flat = 0
+        status: str = ""
+
+        while True:
+            stdscr.clear()
+            height, width = stdscr.getmaxyx()
+            stdscr.addnstr(
+                0,
+                0,
+                "↑↓=navigate  Alt+↑↓ (or Shift+J/K)=move  e=rename  Enter=confirm  q=cancel",
+                width - 1,
+            )
+
+            # Re-compute the flat layout each draw — moves change the
+            # number of rows in a bucket only if we ever supported
+            # cross-bucket moves, but indices within a bucket are stable.
+            positions = _flat_positions()
+            if not positions:
+                # All editable buckets empty — show a friendly note.
+                stdscr.addnstr(2, 0, "(nothing to reorder)", width - 1)
+            else:
+                cur_flat = max(0, min(cur_flat, len(positions) - 1))
+
+            # Track screen line for each flat position so the highlight
+            # lines up with what's actually drawn.
+            row_line: dict[int, int] = {}
+            line_no = 2
+            for attr in bucket_attrs:
+                if line_no >= height - 1:
+                    break
+                stdscr.addnstr(
+                    line_no, 0, f"── {bucket_labels[attr]} ──", width - 1
+                )
+                line_no += 1
+                rows = _bucket_list(attr)
+                if not rows:
+                    if line_no < height - 1:
+                        stdscr.addnstr(line_no, 2, "(none)", width - 1)
+                        line_no += 1
+                    continue
+                for r_idx, row in enumerate(rows):
+                    if line_no >= height - 1:
+                        break
+                    flat_idx = positions.index((attr, r_idx))
+                    row_line[flat_idx] = line_no
+                    text = f"  {row.id_readable}  {row.display_title}"
+                    attr_flag = (
+                        curses.A_REVERSE if flat_idx == cur_flat else 0
+                    )
+                    stdscr.addnstr(line_no, 0, text, width - 1, attr_flag)
+                    line_no += 1
+
+            if status:
+                stdscr.addnstr(height - 1, 0, status, width - 1)
+            stdscr.refresh()
+
+            key = stdscr.getch()
+            status = ""
+
+            if key == ord("q"):
+                raise ValueError("User cancelled reorder/rename.")
+            if key in (curses.KEY_ENTER, 10, 13):
+                return
+            if not positions:
+                # Nothing to do; Enter or q only.
+                continue
+
+            if key in (curses.KEY_UP, ord("k")):
+                cur_flat = max(0, cur_flat - 1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                cur_flat = min(len(positions) - 1, cur_flat + 1)
+            elif key == ord("K"):
+                # Shift+K — move up within section (fallback for Alt+↑).
+                cur_flat = _move_within_section(
+                    plan, positions, cur_flat, direction=-1
+                )
+            elif key == ord("J"):
+                # Shift+J — move down within section (fallback for Alt+↓).
+                cur_flat = _move_within_section(
+                    plan, positions, cur_flat, direction=+1
+                )
+            elif key == 27:  # ESC — start of an Alt-prefixed sequence
+                stdscr.nodelay(True)
+                try:
+                    nxt = stdscr.getch()
+                finally:
+                    stdscr.nodelay(False)
+                if nxt == curses.KEY_UP or nxt == ord("k"):
+                    cur_flat = _move_within_section(
+                        plan, positions, cur_flat, direction=-1
+                    )
+                elif nxt == curses.KEY_DOWN or nxt == ord("j"):
+                    cur_flat = _move_within_section(
+                        plan, positions, cur_flat, direction=+1
+                    )
+                # bare ESC (no follow-up) is a no-op
+            elif key == ord("e"):
+                attr, r_idx = positions[cur_flat]
+                rows = _bucket_list(attr)
+                line = row_line.get(cur_flat, 2)
+                new_title = _curses_inline_edit(
+                    stdscr, line, rows[r_idx].display_title, width
+                )
+                if new_title is None:
+                    # Esc — cancelled, keep original.
+                    pass
+                elif new_title.strip() == "":
+                    status = "(empty title rejected; original kept)"
+                else:
+                    rows[r_idx].display_title = new_title
+
+    def _move_within_section(
+        plan_: "AgendaPlan",
+        positions: list[tuple[str, int]],
+        cur_flat: int,
+        *,
+        direction: int,
+    ) -> int:
+        """Swap the highlighted row with its in-section neighbor. A move
+        that would cross a section boundary is a silent no-op."""
+        attr, r_idx = positions[cur_flat]
+        rows = getattr(plan_, attr)
+        new_idx = r_idx + direction
+        if new_idx < 0 or new_idx >= len(rows):
+            return cur_flat  # would cross section boundary
+        rows[r_idx], rows[new_idx] = rows[new_idx], rows[r_idx]
+        # Recompute flat index for the moved row.
+        new_positions = []
+        for a in bucket_attrs:
+            for idx in range(len(getattr(plan_, a))):
+                new_positions.append((a, idx))
+        return new_positions.index((attr, new_idx))
+
+    curses.wrapper(draw)
+
+
+def _curses_inline_edit(
+    stdscr, line: int, initial: str, width: int
+) -> Optional[str]:
+    """Inline rename editor.
+
+    Uses `curses.textpad.Textbox` overlaid in a one-line subwindow,
+    pre-filled with `initial`. Returns the entered text (possibly
+    whitespace-only — caller decides what to do), or `None` on Esc.
+    """
+    import curses
+    import curses.textpad as textpad
+
+    # Draw a small editor window over the highlighted row.
+    edit_width = max(10, width - 4)
+    edit_win = curses.newwin(1, edit_width, line, 2)
+    edit_win.erase()
+    # Pre-fill the textbox with the current title.
+    for ch in initial:
+        try:
+            edit_win.addch(ch)
+        except curses.error:
+            # Filled the visible row; remaining input is still editable.
+            break
+    edit_win.move(0, min(len(initial), edit_width - 1))
+
+    cancelled = {"value": False}
+
+    def validate(ch: int) -> int:
+        # Esc cancels the edit.
+        if ch == 27:
+            cancelled["value"] = True
+            return 7  # Ctrl-G — Textbox's "done editing" signal
+        # Enter confirms (textpad uses Ctrl-G by default; map Enter to it).
+        if ch in (10, 13):
+            return 7
+        # Backspace handling on terminals that report 127.
+        if ch == 127:
+            return curses.KEY_BACKSPACE
+        return ch
+
+    curses.curs_set(1)
+    try:
+        box = textpad.Textbox(edit_win, insert_mode=True)
+        result = box.edit(validate)
+    finally:
+        curses.curs_set(0)
+
+    if cancelled["value"]:
+        return None
+    return result.rstrip("\n").rstrip(" ").rstrip()  # Textbox right-pads
+
+
+def _tkinter_reorder_rename(plan: "AgendaPlan") -> None:
+    """Tkinter screen: three Listboxes (Present / Mention / Open) with
+    ↑ / ↓ / Rename… buttons. OK confirms; Cancel raises ValueError.
+    Mutates `plan` in place. Spec 005 §Tkinter variant.
+    """
+    import tkinter as tk
+    from tkinter import messagebox, simpledialog
+
+    bucket_attrs = [attr for attr, _ in _REORDER_BUCKETS]
+    bucket_labels = {attr: label for attr, label in _REORDER_BUCKETS}
+
+    root = tk.Tk()
+    root.withdraw()
+    top = tk.Toplevel(root)
+    top.title("sprint-recap — reorder & rename")
+
+    listboxes: dict[str, "tk.Listbox"] = {}
+
+    def _refresh(attr: str) -> None:
+        lb = listboxes[attr]
+        lb.delete(0, tk.END)
+        for row in getattr(plan, attr):
+            lb.insert(
+                tk.END, f"{row.id_readable}  {row.display_title}"
+            )
+
+    def _on_select(active_attr: str) -> None:
+        """Single-focus: selecting in one Listbox clears the other two."""
+        for attr, lb in listboxes.items():
+            if attr != active_attr:
+                lb.selection_clear(0, tk.END)
+
+    def _selected_index(attr: str) -> Optional[int]:
+        sel = listboxes[attr].curselection()
+        if not sel:
+            return None
+        return sel[0]
+
+    def _move(attr: str, direction: int) -> None:
+        idx = _selected_index(attr)
+        if idx is None:
+            return
+        rows = getattr(plan, attr)
+        new_idx = idx + direction
+        if new_idx < 0 or new_idx >= len(rows):
+            return
+        rows[idx], rows[new_idx] = rows[new_idx], rows[idx]
+        _refresh(attr)
+        listboxes[attr].selection_set(new_idx)
+        listboxes[attr].activate(new_idx)
+
+    def _rename(attr: str) -> None:
+        idx = _selected_index(attr)
+        if idx is None:
+            return
+        row = getattr(plan, attr)[idx]
+        new_title = simpledialog.askstring(
+            "sprint-recap",
+            f"Rename {row.id_readable}",
+            initialvalue=row.display_title,
+            parent=top,
+        )
+        if new_title is None:
+            return  # cancelled
+        if new_title.strip() == "":
+            messagebox.showerror(
+                "sprint-recap",
+                "Title cannot be blank; original kept.",
+                parent=top,
+            )
+            return
+        row.display_title = new_title
+        _refresh(attr)
+        listboxes[attr].selection_set(idx)
+        listboxes[attr].activate(idx)
+
+    for attr in bucket_attrs:
+        section = tk.Frame(top)
+        section.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+        tk.Label(section, text=bucket_labels[attr], anchor="w").pack(
+            fill=tk.X
+        )
+        lb = tk.Listbox(section, height=6, exportselection=False)
+        lb.pack(fill=tk.BOTH, expand=True)
+        listboxes[attr] = lb
+        # Single-focus selection model.
+        lb.bind(
+            "<<ListboxSelect>>",
+            lambda _e, a=attr: _on_select(a),
+        )
+        button_row = tk.Frame(section)
+        button_row.pack(fill=tk.X, pady=2)
+        tk.Button(
+            button_row, text="↑", command=lambda a=attr: _move(a, -1)
+        ).pack(side=tk.LEFT, padx=2)
+        tk.Button(
+            button_row, text="↓", command=lambda a=attr: _move(a, +1)
+        ).pack(side=tk.LEFT, padx=2)
+        tk.Button(
+            button_row, text="Rename…", command=lambda a=attr: _rename(a)
+        ).pack(side=tk.LEFT, padx=2)
+        _refresh(attr)
+
+    confirmed = {"value": False}
+
+    def confirm() -> None:
+        confirmed["value"] = True
+        top.destroy()
+
+    def cancel() -> None:
+        top.destroy()
+
+    button_frame = tk.Frame(top)
+    button_frame.pack(pady=6)
+    tk.Button(button_frame, text="OK", command=confirm).pack(
+        side=tk.LEFT, padx=4
+    )
+    tk.Button(button_frame, text="Cancel", command=cancel).pack(
+        side=tk.LEFT, padx=4
+    )
+
+    top.protocol("WM_DELETE_WINDOW", cancel)
+    top.grab_set()
+    root.wait_window(top)
+    root.destroy()
+
+    if not confirmed["value"]:
+        raise ValueError("User cancelled reorder/rename.")
+
+
+def prompt_reorder_rename(plan: "AgendaPlan") -> None:
+    """Spec 005 — let the user reorder rows within each editable bucket
+    and edit the display title that the deck and per-run log will use.
+
+    Mutates ``plan`` in place. Reorders within ``plan.demo``,
+    ``plan.no_demo``, ``plan.open``; ``plan.excluded`` is neither shown
+    nor touched. Cross-bucket moves are out of scope (that's spec 004's
+    job). Renames are local to one run — nothing is persisted.
+
+    Skips the UI and returns immediately when the three editable buckets
+    are all empty. Raises ``ValueError`` on cancel.
+    """
+    if _reorder_is_empty(plan):
+        return
+    mode = detect_prompt_mode()
+    if mode == "console":
+        _console_reorder_rename(plan)
+    else:
+        _tkinter_reorder_rename(plan)

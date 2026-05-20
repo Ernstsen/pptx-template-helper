@@ -29,7 +29,7 @@ from typing import Iterable, Sequence
 from pptx import Presentation
 from pptx.text.text import _Paragraph, _Run, TextFrame  # noqa: F401  (typing)
 
-from sprint_recap.models import AgendaPlan, Sprint, SprintIssue
+from sprint_recap.models import AgendaPlan, AgendaRow, Sprint
 
 
 _MONTHS = [
@@ -151,16 +151,16 @@ def _clear_text_frame(text_frame) -> _Run | None:
     return rpr_xml  # type: ignore[return-value]
 
 
-def _write_agenda(text_frame, issues: Sequence[SprintIssue]) -> None:
+def _write_agenda(text_frame, rows: Sequence[AgendaRow]) -> None:
     rpr_xml = _clear_text_frame(text_frame)
 
-    if not issues:
+    if not rows:
         # Leave the frame empty (one empty paragraph from clear()).
         return
 
     # First paragraph reuses the cleared frame's existing paragraph object.
     first_para = text_frame.paragraphs[0]
-    first_para.text = issues[0].title
+    first_para.text = rows[0].display_title
     if rpr_xml is not None and first_para.runs:
         # Clone the captured rPr onto the new run.
         first_run_elem = first_para.runs[0]._r
@@ -171,9 +171,9 @@ def _write_agenda(text_frame, issues: Sequence[SprintIssue]) -> None:
             first_run_elem.remove(existing_rpr)
         first_run_elem.insert(0, copy.deepcopy(rpr_xml))
 
-    for issue in issues[1:]:
+    for row in rows[1:]:
         para = text_frame.add_paragraph()
-        para.text = issue.title
+        para.text = row.display_title
         if rpr_xml is not None and para.runs:
             run_elem = para.runs[0]._r
             existing_rpr = run_elem.find(
@@ -263,20 +263,22 @@ def _clone_slide(prs, slide):
     return new_slide
 
 
-def _expand_demo_range(prs, demo_issues: Sequence[SprintIssue]) -> None:
+def _expand_demo_range(prs, demo_rows: Sequence[AgendaRow]) -> None:
     result = _find_item_range(prs)
     if result is None:
         return
     start_idx, end_idx = result
     template_slides = [prs.slides[i] for i in range(start_idx, end_idx + 1)]
     original_count = len(prs.slides)
-    for issue in demo_issues:
+    for row in demo_rows:
         for tmpl in template_slides:
             new_slide = _clone_slide(prs, tmpl)
             for tf in _iter_shapes_text_frames(new_slide.shapes):
                 for para in tf.paragraphs:
                     if ITEM_TITLE_TAG in para.text:
-                        _replace_in_paragraph(para, ITEM_TITLE_TAG, issue.title)
+                        _replace_in_paragraph(
+                            para, ITEM_TITLE_TAG, row.display_title
+                        )
             if new_slide.has_notes_slide:
                 for para in new_slide.notes_slide.notes_text_frame.paragraphs:
                     if DEMO_START_TAG in para.text:

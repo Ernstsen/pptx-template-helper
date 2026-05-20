@@ -28,7 +28,13 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from sprint_recap import classify, config, deck, logging_setup, naming, prompts
-from sprint_recap.models import AgendaBucket, AgendaPlan, SavedSettings, Sprint
+from sprint_recap.models import (
+    AgendaBucket,
+    AgendaPlan,
+    AgendaRow,
+    SavedSettings,
+    Sprint,
+)
 from sprint_recap.youtrack import Board, Project, YouTrackClient, YouTrackError
 
 
@@ -185,14 +191,18 @@ def _write_cross_reference(
     log: logging.Logger, plan: AgendaPlan
 ) -> None:
     log.info("agenda:")
-    for issue in plan.demo:
-        log.info("  %s | demo     | %s", issue.id_readable, issue.title)
-    for issue in plan.no_demo:
-        log.info("  %s | no-demo  | %s", issue.id_readable, issue.title)
-    for issue in plan.open:
-        log.info("  %s | open     | %s", issue.id_readable, issue.title)
-    for issue in plan.excluded:
-        log.info("  %s | excluded | %s", issue.id_readable, issue.title)
+    # Spec 005: read `display_title` so the cross-reference matches what
+    # the deck shows after the reorder/rename screen. No `(renamed)`
+    # suffix — explicit `rename:` log lines already cover the audit
+    # trail.
+    for row in plan.demo:
+        log.info("  %s | demo     | %s", row.id_readable, row.display_title)
+    for row in plan.no_demo:
+        log.info("  %s | no-demo  | %s", row.id_readable, row.display_title)
+    for row in plan.open:
+        log.info("  %s | open     | %s", row.id_readable, row.display_title)
+    for row in plan.excluded:
+        log.info("  %s | excluded | %s", row.id_readable, row.display_title)
 
 
 def _apply_categorization(
@@ -214,14 +224,20 @@ def _apply_categorization(
     and raises `ValueError` on any inconsistency. The prompt is the only
     producer of `mapping`, so a violation is a programmer error.
     """
-    # Preserve the input plan's order: finished issues first (resolved_at
+    # Preserve the input plan's order: finished rows first (resolved_at
     # ascending), then unresolved (created_at ascending). The input plan
     # already has each bucket in its natural sort, so we can just take
     # the four lists in order and assume each "side" stays internally
     # ordered.
-    all_issues = [*plan.demo, *plan.no_demo, *plan.open, *plan.excluded]
+    #
+    # Spec 005: lists hold AgendaRow wrappers. We reuse the SAME
+    # AgendaRow instance when moving across buckets so any prior rename
+    # survives a re-categorize.
+    all_rows: list[AgendaRow] = [
+        *plan.demo, *plan.no_demo, *plan.open, *plan.excluded
+    ]
 
-    by_id = {i.id_readable: i for i in all_issues}
+    by_id = {row.id_readable: row for row in all_rows}
     if set(mapping.keys()) != set(by_id.keys()):
         missing = set(by_id.keys()) - set(mapping.keys())
         extra = set(mapping.keys()) - set(by_id.keys())
@@ -230,31 +246,31 @@ def _apply_categorization(
             f"extra={sorted(extra)}"
         )
 
-    finished = [i for i in all_issues if i.is_finished]
-    unresolved = [i for i in all_issues if not i.is_finished]
-    finished.sort(key=lambda i: (i.resolved_at, i.id_readable))
-    unresolved.sort(key=lambda i: (i.created_at, i.id_readable))
+    finished = [row for row in all_rows if row.is_finished]
+    unresolved = [row for row in all_rows if not row.is_finished]
+    finished.sort(key=lambda r: (r.issue.resolved_at, r.id_readable))
+    unresolved.sort(key=lambda r: (r.issue.created_at, r.id_readable))
 
-    buckets: dict[str, list] = {
+    buckets: dict[str, list[AgendaRow]] = {
         "present": [],
         "mention": [],
         "open": [],
         "exclude": [],
     }
-    for issue in finished:
-        b = mapping[issue.id_readable]
+    for row in finished:
+        b = mapping[row.id_readable]
         if b not in buckets:
             raise ValueError(
-                f"invalid bucket {b!r} for {issue.id_readable!r}"
+                f"invalid bucket {b!r} for {row.id_readable!r}"
             )
-        buckets[b].append(issue)
-    for issue in unresolved:
-        b = mapping[issue.id_readable]
+        buckets[b].append(row)
+    for row in unresolved:
+        b = mapping[row.id_readable]
         if b not in buckets:
             raise ValueError(
-                f"invalid bucket {b!r} for {issue.id_readable!r}"
+                f"invalid bucket {b!r} for {row.id_readable!r}"
             )
-        buckets[b].append(issue)
+        buckets[b].append(row)
 
     new_plan = AgendaPlan(
         demo=buckets["present"],
@@ -393,6 +409,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         mapping = prompts.prompt_categorization(plan)
         if mapping:
             plan = _apply_categorization(plan, mapping)
+
+        # Spec 005: post-categorization reorder + rename screen. Mutates
+        # plan in place; ValueError on cancel falls through to the
+        # standard abort-without-writing-files path.
+        prompts.prompt_reorder_rename(plan)
+        for row in [*plan.demo, *plan.no_demo, *plan.open, *plan.excluded]:
+            if row.display_title != row.issue.title:
+                logger.info(
+                    'rename: %s "%s" → "%s"',
+                    row.id_readable,
+                    row.issue.title,
+                    row.display_title,
+                )
 
         logger.info(
             "demo_count = %d   no_demo_count = %d   open_count = %d   excluded_count = %d",
